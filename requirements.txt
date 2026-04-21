@@ -1,0 +1,7 @@
+simglucose
+lmfit
+scipy
+pandas
+numpy
+matplotlib
+setuptools<81
