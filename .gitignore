@@ -1,2 +1,3 @@
 .venv/
-.vscode/
+sbi_logs/
+.DS_Store

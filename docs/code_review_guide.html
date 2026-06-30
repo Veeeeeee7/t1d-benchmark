@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 20mm 16mm 18mm 16mm; }
+  body { font-family: "Helvetica Neue", Arial, sans-serif; font-size: 10.5pt; line-height: 1.42; color: #1a1a1a; }
+  h1 { font-size: 21pt; margin: 0 0 2pt 0; }
+  h1 .sub { display:block; font-size: 11pt; font-weight: normal; color:#555; margin-top:4pt; }
+  h2 { font-size: 14pt; margin: 20pt 0 8pt 0; padding-bottom: 3pt; border-bottom: 2px solid #2b557a; color:#1d3a55; }
+  h3 { font-size: 11.5pt; margin: 14pt 0 5pt 0; color:#2b2b2b; }
+  p { margin: 6pt 0; }
+  ul { margin: 5pt 0 5pt 0; padding-left: 18pt; }
+  li { margin: 2.5pt 0; }
+  table { width: 100%; border-collapse: collapse; margin: 8pt 0; font-size: 8.7pt; }
+  th, td { border: 1px solid #cfcfcf; padding: 5pt 6pt; vertical-align: top; text-align: left; }
+  th { background: #eef1f4; font-weight: 600; }
+  td.file { font-family: "DejaVu Sans Mono", monospace; font-size: 8.2pt; white-space: nowrap; }
+  code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.6pt; background:#f3f3f3; padding:0 2px; border-radius:2px; }
+  pre { font-family: "DejaVu Sans Mono", monospace; font-size: 8.4pt; background:#f6f6f6; border:1px solid #e2e2e2; padding:8pt; border-radius:3px; white-space:pre-wrap; }
+  .meta { width:100%; border-collapse:collapse; margin-top:10pt; font-size:10pt; }
+  .meta td { border:none; padding:3pt 8pt 3pt 0; }
+  .meta td.k { font-weight:600; width:78pt; color:#333; }
+  .callout { margin:9pt 0; padding:8pt 10pt; border-radius:3px; page-break-inside: avoid; }
+  .caveat { background:#fff7e8; border-left:4px solid #e0922f; }
+  .checks { background:#eaf2fb; border-left:4px solid #2b6cb0; }
+  .rev    { background:#f1f4f2; border-left:4px solid #5a8f6f; }
+  .lbl { font-weight:700; letter-spacing:.4px; font-size:8.5pt; text-transform:uppercase; }
+  .caveat .lbl { color:#b3701a; } .checks .lbl { color:#23578f; } .rev .lbl { color:#3f6e52; }
+  .new { color:#1d6b2e; font-weight:600; }
+  .small { font-size:9pt; color:#555; }
+  .nowrap { white-space:nowrap; }
+</style>
+</head>
+<body>
+
+<h1>T1D Decision-Targeted Twinning
+<span class="sub">A code-review walkthrough for verifying the platform</span></h1>
+
+<p class="small">This guide assumes no prior knowledge of the code. It takes you from “I don’t know what any of this does” to a structured, risk-ordered review of an AI-generated research codebase, ending in a checklist of things to confirm before you trust any result. Every file is mapped to what it does and what to scrutinise.</p>
+
+<table class="meta">
+<tr><td class="k">Domain</td><td>Type-1-diabetes glucose-control simulation &amp; digital twins</td></tr>
+<tr><td class="k">Goal</td><td>Identify a personalised glucose model, use it to rank candidate therapies, and ask which twinning method preserves the ranking</td></tr>
+<tr><td class="k">Language</td><td>Python (NumPy / SciPy / PyTorch / emcee / sbi / simglucose)</td></tr>
+<tr><td class="k">Size</td><td>~50 Python modules in two packages (<code>t1d_twin/</code> core, <code>experiments/</code> suite) + design docs</td></tr>
+<tr><td class="k">Status</td><td>Largely unrun — compiles and passes loose-tolerance tests; not validated end-to-end. Prior/fit layer refactored 6/27; in-code docstrings synced to match.</td></tr>
+</table>
+
+<div class="callout rev"><span class="lbl">Revision note (2026-06-27) — the prior/fit layer was rebuilt</span>
+<p>The earlier <em>least-squares + empirical-Bayes</em> prior is gone. The per-patient fit is now a <strong>MAP</strong> estimate under the <strong>published ReplayBG prior</strong> (Cappon et al., 2023), and that same published prior is used directly by MCMC and SBI. Delta vs the previous guide:</p>
+<ul>
+<li><strong>New file</strong> <code>t1d_twin/replaybg_priors.py</code> — the published prior as the single source of truth (constants + three consumer APIs).</li>
+<li><code>population.py</code>: <code>fit_replaybg</code> is now MAP; the cohort-derived prior is removed; <code>install_population</code> → <code>install_published_prior</code> (back-compat shim retained).</li>
+<li><code>identify_mcmc.py</code> / <code>identify_sbi.py</code>: uniform / <code>BoxUniform</code> priors → the informative published prior, both delegating to <code>replaybg_priors</code>.</li>
+<li>The ordering constraints <code>ka2&lt;kd</code> and <code>kabs&lt;kempt</code> are now enforced.</li>
+<li><strong>In-code docstrings synced</strong> across ~14 modules so comments match the refactor (and the earlier 168 h→24 h horizon change); see §2.</li>
+<li>Current dated note: <strong><code>MAP_published_prior_refactor_6_27.md</code></strong> (supersedes <code>population_prior_refactor_6_26.md</code>).</li>
+</ul>
+<p class="small">The <code>value.py</code> / <code>evaluate.py</code> / <code>replaybg_model.py</code> material (Layer A, review-order step 1, scoring-core checks) is unchanged — that first review phase has been completed manually.</p>
+</div>
+
+<h2>1 &nbsp; What you are reviewing</h2>
+<p>The codebase is a <strong>research benchmark</strong>. It asks a single scientific question: when you build a simplified “digital twin” of a diabetes patient from their glucose data, should you judge that twin by how closely its glucose trajectory matches reality (<strong>fidelity</strong>), or by whether it picks the same best therapy the real patient would (<strong>decision transfer</strong>)? The thesis is that these come apart — a twin can track the data well yet rank therapies wrong, and vice versa — and the whole pipeline is engineered to measure that gap. The authors call this <strong>DT² (decision-targeted twinning)</strong>.</p>
+
+<h3>The Two Models — the load-bearing idea</h3>
+<p>Everything depends on a deliberate mismatch between two glucose models:</p>
+<ul>
+<li>The <strong>plant</strong> (ground truth) is <strong>simglucose</strong> (the UVA/Padova simulator) — a complex ~13-state model treated as the “real patient.” It is a black box: you only see the CGM trace it emits.</li>
+<li>The <strong>twin family</strong> is <strong>ReplayBG</strong> — a simplified 8-parameter ODE. It cannot reproduce the plant exactly. The authors write this mismatch as <strong>“Φ not in F”</strong> and it is the entire point: a perfect twin is impossible by construction, so the question of <em>which</em> imperfection matters becomes meaningful.</li>
+</ul>
+<p>A “digital twin” is therefore nothing more than a vector of 8 ReplayBG parameters. A “twinning method” is a recipe for turning one CGM trace into those 8 numbers. Three such methods are compared (next section).</p>
+
+<div class="callout caveat"><span class="lbl">Caveat — the core invariant, the easiest thing to accidentally break</span>
+<ul>
+<li>Every method maps CGM → ReplayBG parameters, and every method’s machinery stays inside the ReplayBG family. A method must <strong>never</strong> train on simglucose simulations — that would leak the true dynamics the other methods can’t see (“simulator-family leakage”) and would break fairness and contaminate the “Φ not in F” premise.</li>
+<li>The only simglucose data any method may use is <strong>the single CGM trace it is twinning</strong>.</li>
+<li><span class="new">What changed:</span> patient information no longer enters through a <em>cohort-derived</em> prior. The shared prior is now the <strong>published</strong> ReplayBG prior (<code>replaybg_priors.py</code>), which carries <strong>zero</strong> cohort/simglucose information — so the fairness story is actually <em>cleaner</em>. The per-patient label (<code>rbg_theta</code>) is a <strong>MAP projection</strong> of that patient’s own CGM under the published prior: still a ReplayBG-coordinate projection that discards the “Φ not in F” residual. Your first question reviewing any new path is still: does in-class (ReplayBG-only) training hold?</li>
+</ul>
+</div>
+
+<h3>How a result is produced (the pipeline in one breath)</h3>
+<p>For one patient: (1) run a baseline therapy on simglucose to get an identification CGM trace; (2) each method turns that trace into ReplayBG parameters (a twin); (3) replay a grid of candidate therapies on both the real plant and the twin; (4) score how well the twin’s therapy ranking matches the plant’s true ranking. Repeat over ~1000 synthetic patients and aggregate.</p>
+
+<h2>2 &nbsp; Read this before you open a single file</h2>
+<p>Four things will mislead you if you don’t know them going in. None is a bug — they are facts about the state of the delivery.</p>
+
+<div class="callout caveat"><span class="lbl">Caveat — the real project is two packages</span>
+<p>The code imports as <code>from t1d_twin import …</code> and <code>from experiments import …</code>, with relative imports. It expects a <code>t1d_twin/</code> core package and an <code>experiments/</code> suite package at the repo root; review against that layout, not a flat dump. The new <code>replaybg_priors.py</code> lives in <code>t1d_twin/</code> (core).</p>
+</div>
+
+<div class="callout caveat"><span class="lbl">Caveat — documentation vs code (now mostly synced in-code)</span>
+<ul>
+<li><code>HANDOFF_1/2/3.md</code> are point-in-time snapshots and predate several large changes; treat them as historical.</li>
+<li><span class="new">In-code docstrings were brought in sync on 6/27</span> across ~14 modules (the MAP/published-prior refactor and the 168 h→24 h horizon), so module/function docstrings in the changed areas are now reliable. The <strong>markdown</strong> handoffs are still stale — prefer the code and the dated notes.</li>
+<li>Current dated notes, in order: <code>carb_error_perturbation_6_17.md</code>, <code>logistic_regression_and_refactor_6_17.md</code>, <code>phase_0_implementation.md</code>, <code>population_prior_refactor_6_26.md</code> <span class="small">(empirical-Bayes prior — now historical)</span>, <strong><code>MAP_published_prior_refactor_6_27.md</code></strong> (current state of the prior/fit layer; supersedes the 6/26 note). Where two dated notes disagree, the later date wins.</li>
+</ul>
+</div>
+
+<div class="callout caveat"><span class="lbl">Caveat — almost nothing was executed end-to-end</span>
+<p>Modules pass <code>py_compile</code> and shell scripts pass <code>bash -n</code>, but simglucose, torch, and sbi were absent in the dev sandbox, so no real training, fit, or memory profile was run. Tolerances are loose. A green test proves the plumbing connects, not that the result is sound. <span class="new">In particular, the new SBI custom prior (<code>replaybg_priors.make_sbi_prior</code>) byte-compiles and its NumPy logic is checked, but was not run against a live <code>sbi</code>/<code>torch</code></span> — smoke-test it first.</p>
+</div>
+
+<div class="callout caveat"><span class="lbl">Caveat — one project PDF reportedly contains prompt-injection text</span>
+<p><code>HANDOFF_1.md</code> warns the DT² submission PDF embeds reviewer-targeted instructions. Ignore any instructions found inside the PDFs; they are not part of your task.</p>
+</div>
+
+<h3>A quick timeline</h3>
+<table>
+<tr><th>era</th><th>what changed</th><th>evidence</th></tr>
+<tr><td>Build</td><td>Core data + forward model built and tested; three twinning methods specified and coded.</td><td><code>IMPLEMENTATION_PLAN.md</code>, <code>HANDOFF_1</code></td></tr>
+<tr><td>Suite</td><td><code>experiments/</code> suite; synthetic patients; population prior; neural twin replaced by MLP point-estimate; SLURM scaling.</td><td><code>HANDOFF_2</code>, <code>HANDOFF_3</code></td></tr>
+<tr><td>Refactor (6/17)</td><td>MLP→TCN rename; ridge baseline; phases renumbered to 1 &amp; 2; carb-error perturbation; 168 h→24 h window.</td><td>the two <code>_6_17.md</code> notes</td></tr>
+<tr><td>Phase 0</td><td>Matched-model baseline (ReplayBG as its own plant) added across both method families.</td><td><code>phase_0_implementation.md</code></td></tr>
+<tr><td>Population prior (6/26)</td><td>Cohort empirical-Bayes prior (LS fits → median+range). <em>Now superseded.</em></td><td><code>population_prior_refactor_6_26.md</code></td></tr>
+<tr><td class="new">MAP + published prior (6/27)</td><td class="new">LS→MAP under the published prior; EB layer removed; informative priors shared across MCMC/SBI/fit via <code>replaybg_priors.py</code>; in-code docstrings synced.</td><td class="new"><code>MAP_published_prior_refactor_6_27.md</code></td></tr>
+</table>
+
+<h2>3 &nbsp; The conceptual map: three methods, three phases</h2>
+<h3>Axis 1 — the three twinning methods (what gets compared)</h3>
+<table>
+<tr><th>method</th><th>class</th><th>nature</th><th>trains on</th></tr>
+<tr><td><strong>MCMC</strong></td><td><code>MCMCTwin</code></td><td>Per-instance Bayesian posterior over the 8 params (emcee, vectorised walkers).</td><td>ReplayBG sims (in the likelihood)</td></tr>
+<tr><td><strong>SBI</strong></td><td><code>SBITwin</code></td><td>Amortised neural posterior (NPE / masked autoregressive flow).</td><td>ReplayBG (θ, CGM) pairs</td></tr>
+<tr><td><strong>TCN / ridge</strong></td><td><code>PointTwin</code></td><td>Amortised point estimate of θ (regression). The deliberately-weak baseline(s).</td><td>ReplayBG (θ, CGM) pairs</td></tr>
+</table>
+<p class="small">All three emit 8 ReplayBG numbers and run through the same replay/scoring code. <code>PointTwin</code> subclasses <code>SBITwin</code> with a single-row posterior (degenerate uncertainty by design). <span class="new">All three now share the informative published prior via <code>replaybg_priors</code> — MCMC’s prior is no longer uniform, SBI’s is no longer <code>BoxUniform</code>, and the per-patient label fit (<code>fit_replaybg</code>) is MAP under that same prior, so one citable object is threaded through fit, MCMC, and SBI.</span></p>
+
+<h3>Axis 2 — the three phases (which plant / labels)</h3>
+<table>
+<tr><th>phase</th><th>plant</th><th>methods</th><th>answers</th></tr>
+<tr><td>Phase 0</td><td>ReplayBG (matched)</td><td>MCMC, SBI, TCN, ridge</td><td>Best case: how well do methods rank when the model is correctly specified? The ceiling.</td></tr>
+<tr><td>Phase 1</td><td>simglucose</td><td>TCN, ridge (amortised)</td><td>How well do cross-patient regressors recover θ and rank therapies?</td></tr>
+<tr><td>Phase 2</td><td>simglucose</td><td>MCMC, SBI (per-instance)</td><td>The real test: per-patient Bayesian/SBI twins under the intended plant↔twin mismatch.</td></tr>
+</table>
+
+<div class="callout checks"><span class="lbl">Review checks — why Phase 0 exists</span>
+<p>Under the mismatch, MCMC was seen to collapse to ~0 rank correlation and SBI showed huge regret outliers — which looked like a harness bug. Phase 0 makes ReplayBG its own plant and shows the same code scores near-perfectly (rank corr ~0.95–1.0). That dissociates “the methods are broken” from “the mismatch is hard.” Confirm this dissociation reproduces — it is the spine of the project’s defence. <span class="new">(Phase 1 labels are now MAP projections, so they are mildly prior-informed; this slightly blurs Phase 1 as a “pure data-only” baseline — see §6.)</span></p>
+</div>
+
+<h2>4 &nbsp; Recommended review order (highest risk first)</h2>
+<table>
+<tr><th>step</th><th>files</th><th>why here</th></tr>
+<tr><td>1. The scoring contract</td><td class="file">value.py → evaluate.py → replaybg_model.py</td><td>Defines “correct” for everything else. If reward or the metrics are wrong, every table is wrong. <span class="small">(Reviewed.)</span></td></tr>
+<tr><td>2. The leakage boundary</td><td class="file">replaybg_priors.py, population.py, cv_common.py</td><td>The fairness guarantee. A patient in both train and test, or a method touching simglucose sims, silently breaks the science. <span class="new">The prior is now the published one — confirm it carries no cohort info and all methods import it.</span></td></tr>
+<tr><td>3. The twinning methods</td><td class="file">twin.py, identify_mcmc.py, identify_sbi.py, identify_tcn.py</td><td>The objects compared. <span class="new">Confirm MCMC and SBI both delegate to <code>replaybg_priors</code> (one shared informative prior)</span> and the natural/log-space conversions are consistent.</td></tr>
+<tr><td>4. The decision problem</td><td class="file">patients.py (carb error), exp_common.py (the grid)</td><td>Without the carb-counting-error perturbation the ranking task is trivial and the headline result cannot appear.</td></tr>
+<tr><td>5. The plant adapters</td><td class="file">simglucose_adapter.py, patients.py (run loop), replaybg_plant.py</td><td>How ground truth is generated. Watch unit conversions (the #1 historical bug) and early-termination padding.</td></tr>
+<tr><td>6. The phase drivers</td><td class="file">run_phase0/1/2.py, phase_runner.py, build_*_dataset.py, run_mcmc/sbi*.py</td><td>Orchestration only. Skim once you trust 1–5.</td></tr>
+</table>
+
+<h2>5 &nbsp; File-by-file map, by layer</h2>
+<p class="small">Files marked <strong>[core]</strong> live in <code>t1d_twin/</code>; the rest live in <code>experiments/</code>.</p>
+
+<h3>Layer A — The scoring contract (start here) &nbsp;<span class="small">— reviewed; unchanged</span></h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file">value.py [core]</td><td>Pure functions on a glucose series: the risk kernel, reward, and clinical metrics (TIR/TBR/TAR, LBGI/HBGI). <code>reward = -sum(magni_risk)</code> is the default objective every ranking uses.</td><td>Named “Magni” but uses Kovatchev constants (zero-risk at 112.5 mg/dL, not 140). Confirm the anchors: 112.5→~0, 70→~7.8, 250→~22.4. Reward sums (not averages) risk over a fixed horizon.</td></tr>
+<tr><td class="file">evaluate.py [core]</td><td>The four headline metrics: spearman (rank corr vs truth), regret (true reward lost by the twin’s pick), rmse, mard. Plus collect-ground-truth and replay-on-twin helpers and the head-to-head runner.</td><td>All metrics computed IG-vs-IG with sensor noise stripped — read the module docstring’s justification, it is a real scientific decision. Confirm <code>RunResult.bg()</code> is genuinely the noise-free signal under the CGM.</td></tr>
+<tr><td class="file">replaybg_model.py [core]</td><td>The shared 8-parameter ODE engine: <code>simulate()</code> (batched RK4), <code>steady_state()</code>, the rho hypoglycemia term, and the param layout (<code>THETA_NAMES</code>).</td><td>Every likelihood / training / replay routes through <code>simulate</code>. Check the insulin appearance delay, the IG sample-index convention (sample k at time (k+1)·dt), and that batched == single-theta.</td></tr>
+</table>
+
+<h3>Layer B — The leakage boundary (the fairness guarantee)</h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file new">replaybg_priors.py [core] — NEW</td><td>The <strong>published</strong> ReplayBG prior (Cappon et al., 2023) as the single source of truth: per-parameter distributions (LogNormal rates, Gamma SI, TruncNormal Gb, √-Normal p2), the <code>ka2&lt;kd</code> / <code>kabs&lt;kempt</code> ordering gates, a generous <strong>support</strong> envelope (<code>SUPPORT_LO/HI</code>, <em>not</em> a prior), and three consumer APIs — <code>prior_residuals</code> (MAP fit), <code>log_prior_phi</code> (MCMC), <code>make_sbi_prior</code> (SBI), plus <code>prior_center</code> (median).</td><td>Confirm the phi-space convention matches the rest of the project (<code>phi = [log(rates), Gb]</code>) and the ordering gates return <code>-inf</code>/large penalty. The point-estimate MAP residuals omit the small p2/SI φ-Jacobians (negligible); <code>log_prior_phi</code> includes them. This module is the new leakage-boundary anchor — it carries <strong>no</strong> cohort or simglucose info.</td></tr>
+<tr><td class="file">population.py</td><td>Per-patient ReplayBG fit + prior install. <code>fit_replaybg</code> is now a <strong>MAP</strong> fit (penalised LS: σ-scaled CGM misfit stacked with <code>replaybg_priors.prior_residuals</code>, started at the published centre). <code>install_published_prior</code> repoints every method’s centre + support box at the published prior.</td><td>The leakage-free argument: the MAP fit is still a <strong>projection</strong> onto the 8 ReplayBG numbers (discards the “Φ not in F” residual). Confirm: (a) the prior is the published one, identical for all methods; (b) <code>install_population</code> is now a back-compat shim that ignores its <code>pop</code> arg; (c) returned RMSE is CGM-only (mg/dL); (d) the EB derivation (<code>bounds</code>/<code>mean_theta</code>, <code>population_from_fits</code>, <code>derive_population</code>) is now dead — see the removal checklist in the 6/27 note.</td></tr>
+<tr><td class="file">cv_common.py</td><td>Model-agnostic Phase-1 plumbing for the TCN and ridge baselines: channel stacking, train-fold input standardisation, <code>group_kfold_indices</code>.</td><td><code>group_kfold</code> must be patient-grouped — all of one patient’s therapy traces fall in the same fold so train/test never share a patient. Verify no patient appears in both, and every patient is tested exactly once.</td></tr>
+</table>
+
+<h3>Layer C — The twinning methods (the objects compared)</h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file">twin.py [core]</td><td>Abstract base class. Subclasses implement <code>predict_ig</code> + <code>summary</code>; base provides CGM generation (IG → sample → sensor noise), prediction bands, <code>replay_run</code>.</td><td><code>_ig_ensemble</code> tiles a 1-row posterior up to <code>n_samples</code> (the documented point-twin band fix). Decision metrics use the noise-free path (<code>add_noise=False</code>).</td></tr>
+<tr><td class="file">identify_mcmc.py [core]</td><td>MCMC twin via emcee, vectorised over walkers. Log-space for the 7 rate params, linear Gb; <span class="new">informative published prior</span>; Gaussian CGM likelihood; returns posterior samples in <code>MCMCTwin</code>.</td><td><span class="new"><code>log_prior</code> now delegates to <code>replaybg_priors.log_prior_phi</code> (no longer uniform).</span> <code>PRIOR_LO/HI</code> are now only a support/clamp box. <span class="new">Identifiability expectation has changed:</span> Gb and SI are data-pinned as before, but <strong>p2 is now pinned by its prior</strong> (√p2 ~ Normal(0.11, 0.004)) — don’t read a tight p2 posterior as data-driven.</td></tr>
+<tr><td class="file">identify_sbi.py [core]</td><td>SBI twin (largest core file): prior, a simulator wrapping ReplayBG for the fixed identification therapy, rejection-sampled training data, NPE/MAF training, then conditioning on the observed CGM.</td><td><span class="new"><code>make_prior</code> now returns <code>replaybg_priors.make_sbi_prior()</code> (best-effort <code>process_prior</code> wrap); <code>log_space=False</code> raises.</span> Ordering is enforced <strong>in the prior’s sampler</strong>, so training θ are valid before the CGM-range rejection ([40,400] mg/dL). Watch the natural↔phi conversions. Joint-IC inference gated off. <span class="new">Least-tested change — smoke-test against your live <code>sbi</code>.</span></td></tr>
+<tr><td class="file">identify_tcn.py [core]</td><td>Amortised regressor building blocks: <code>TCNRegressor</code> (residual dilated 1-D CNN → 8-vector θ) and <code>PointTwin</code> (a ReplayBG run at a single θ-hat).</td><td><code>PointTwin</code> subclasses <code>SBITwin</code> so replay/scoring is shared; method-neutral (TCN + ridge reuse it). The “(MLP) head” in the docstring is the final dense block — correct, not stale.</td></tr>
+<tr><td class="file">tcn_cv.py / linear_cv.py</td><td>The two amortised baselines’ CV drivers: pooled cross-patient regression with patient-grouped K-fold, predicting one held-out θ per patient. TCN = the CNN; linear = closed-form ridge (NumPy).</td><td>Both share <code>cv_common</code> (identical methodology). Confirm targets are in phi-space and per-patient predictions averaged in phi-space. <span class="new">Targets are now MAP <code>rbg_theta</code> (prior-shrunk) — see §6 on p2 as a near-trivial target.</span></td></tr>
+</table>
+
+<h3>Layer D — The decision problem (don’t skip)</h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file">patients.py (carb error)</td><td><code>Subject</code> abstraction + synthetic-patient factory, plus the <strong>carb-counting-error</strong> perturbation: each patient’s programmed carb ratio is deterministically mis-set (<code>CR_prog = CR_true × m</code>).</td><td>Without this, synthetic patients are near-optimally dosed and ranking is trivial. <code>m</code> is a stable SHA-256 hash of the name; optimal corrective bolus <code>f* ≈ m</code>. Run the carb-error note’s checklist (interior optima, no truncation).</td></tr>
+<tr><td class="file">exp_common.py (the grid)</td><td>Cadence/horizon constants (3-min CGM, 1-min ODE, 24 h window), the candidate therapy grid (<code>PROD_BOLUS/BASAL</code>), twin (de)serialisation, per-subject paths.</td><td>The grid must bracket every <code>f*</code> on both sides (interior optima). Horizon changed 168 h → 24 h; <code>WEEK_HOURS</code> is now an alias. Output root is env-driven (scratch).</td></tr>
+<tr><td class="file">experiment.py [core]</td><td>Builds the candidate policy set and the seen/unseen split. The optimal therapy deliberately lands in “unseen” so picking it is a real extrapolation test.</td><td>Asserts the partition is disjoint and covers the set, and the baseline is present (B2 of the original plan).</td></tr>
+<tr><td class="file">policies.py [core]</td><td>simglucose <code>Controller</code> wrappers: a basal-bolus controller with multiplicative bolus/basal modulation factors. One interface drives both plant and twin.</td><td>Open-loop v1 (ignores CGM). <code>ModulatedBBController</code> wraps simglucose’s <code>BBController</code>; the factor knobs define the candidate grid.</td></tr>
+</table>
+
+<h3>Layer E — The plant adapters (where ground truth is made)</h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file">simglucose_adapter.py [core]</td><td>Drives a simglucose patient with any controller for a fixed horizon → a standardized <code>RunResult</code> (timeseries + inputs in ReplayBG units + metadata).</td><td><code>RunResult.replaybg_inputs()</code> repeats sample-rate inputs onto the dt grid. Sample time is 3 min (not 5). Single run interface reused for ground truth and twin replay.</td></tr>
+<tr><td class="file">units.py [core]</td><td>Unit conversions between simglucose (U/min, g/min) and ReplayBG (mU/kg/min, mg/kg/min). “The single most error-prone seam.”</td><td>The #1 historical bug — re-derive independently: <code>mU/kg/min = U/min × 1000 / BW</code>; <code>mg/kg/min = g/min × 1000 / BW</code>. Inverse converters exist.</td></tr>
+<tr><td class="file">patients.py (run loop)</td><td><code>run_on_patient</code> mirrors the adapter for synthetic patients, plus <code>ExplicitBBController</code> and <code>patients.csv</code> read/write.</td><td><strong>Critical:</strong> on an early-terminated run (severe hypo/hyper) it pads the trajectory at the terminal danger glucose so a crash integrates to the worst reward — otherwise a short crashed run accumulates less risk and ranks best, inverting the objective. Verify this padding.</td></tr>
+<tr><td class="file">scenarios.py / sensor.py [core]</td><td>Meal-scenario builders; the UVA/Padova CGM noise model (and Gaussian fallback) applied to twin IG.</td><td>Sensor noise grid depends on <code>sample_time</code>, so IG must be spaced at that <code>sample_time</code>. The twin layer always passes its own <code>sample_time</code>.</td></tr>
+</table>
+
+<h3>Layer F — Phase 2 &amp; Phase 1 drivers (orchestration)</h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file">run_phase2.py / phase_runner.py</td><td>Phase 2 = per-instance twins (MCMC, SBI) over all patients, sharded and resumable. <code>phase_runner</code> is the shared engine: subprocess-per-fit, score, aggregate.</td><td>Each fit isolated in its own process. Resumability skips patients whose <code>comparison_table.csv</code> exists. Confirm the aggregate ignores stale rows. Default <code>--methods</code> is <code>mcmc,sbi</code> (no Point twin in Phase 2).</td></tr>
+<tr><td class="file">run_mcmc.py / run_sbi.py</td><td>Per-patient fit scripts: resolve the subject, install the prior, run identification, save the twin artifact. PROD vs SMOKE dicts.</td><td>Heavy steps (~9 h MCMC / ~2 h SBI per patient at PROD). Seeds fixed. Saved artifact is the posterior samples — enough to re-score. <span class="new">The installed prior is now the published one.</span></td></tr>
+<tr><td class="file">build_phase1_dataset.py / run_phase1.py</td><td>Phase 1: build the treatment-augmented cross-patient dataset (one trace per patient×therapy; per-patient θ target), then K-fold-CV the TCN and ridge baselines.</td><td>The per-patient target reuses the cached <code>rbg_theta</code> (now <span class="new">MAP</span>) when present, else re-fits. <code>proj_rmse</code> reports the CGM-fit error of the simglucose→ReplayBG MAP fit.</td></tr>
+<tr><td class="file">compute_results.py / run_suite.py</td><td><code>compute_results</code>: reload saved twins, score vs the simglucose grid, write the comparison table + a DT² dissociation flag. <code>run_suite</code>: older all-patient orchestrator.</td><td><code>dt2_summary</code> flags when the most faithful twin is not the best ranker — the headline finding. Note the <code>suite_summary.csv</code> collision warning under parallelism.</td></tr>
+</table>
+
+<h3>Layer G — Phase 0 matched-model baseline</h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file">replaybg_plant.py</td><td>The Phase 0 plant: ReplayBG is the ground truth. Builds runs that quack like <code>RunResult</code>. Same grid, same carb error, Gaussian noise.</td><td>Deliberately simglucose-free. Adds N(0,10) noise matching the likelihood — the “everything matches” lower bound. <code>calibrate_cr_true</code> keeps <code>f* = m</code> interior.</td></tr>
+<tr><td class="file">derive_replaybg_params.py</td><td>Fits ReplayBG <strong>once per simglucose patient</strong> (now via the <span class="new">MAP</span> <code>fit_replaybg</code>) and caches <code>rbg_*</code> columns in <code>patients.csv</code>, so Phases 0/1/2 reuse the fit.</td><td>This makes Phase 0 patient <em>i</em> the matched counterpart of Phase 2 patient <em>i</em>. <span class="new">Labels are now MAP, started at the published centre — re-derive after this refactor; the old LS <code>rbg_*</code> values are stale.</span></td></tr>
+<tr><td class="file">run_phase0.py / phase0_paths.py</td><td>Phase 0 driver (mirrors <code>run_phase2</code> with the ReplayBG plant + cohort auto-detector) and a tiny output-namespacing module (<code>results/phase0/</code>).</td><td>Namespacing matters: the matched cohort shares patient names with Phase 2, so separate paths prevent table overwrites / skip-check trips.</td></tr>
+<tr><td class="file">build_phase0_dataset.py / run_phase0_ml.py</td><td>The amortised Phase 0: dataset from the ReplayBG plant with exact θ labels (<code>proj_rmse = 0</code>), then the same TCN/ridge CV as Phase 1.</td><td>Reuses <code>tcn_cv</code>/<code>linear_cv</code>/<code>cv_common</code> verbatim (array-only, plant-agnostic). Needs torch, not simglucose.</td></tr>
+<tr><td class="file">run_mcmc0/sbi0, compute_results0, generate_phase0_patients</td><td>Phase 0 siblings of the Phase 2 fit/score scripts (ReplayBG plant), plus an alternative cohort generator that draws θ from the (now <span class="new">published</span>) prior.</td><td>Near-identical to Phase 2 counterparts — verify only the plant and cohort loader are swapped. <span class="new">Phase 0 installs the same published prior as every other phase.</span></td></tr>
+</table>
+
+<h3>Layer H — Fairness, diagnostics, figures, original runner</h3>
+<table>
+<tr><th>file</th><th>what it does</th><th>look for</th></tr>
+<tr><td class="file">dt2_scoring.py / dt2_fairness.py</td><td><code>dt2_scoring</code>: score an in-memory twin without disk round-trips (used by Phase 1; <span class="new">scores against the simglucose plant, not against <code>rbg_theta</code> — this is why MAP labels create no circularity in Phase 2</span>). <code>dt2_fairness</code>: cross-patient regret normalisation.</td><td><code>dt2_fairness</code> is additive and not yet wired in — raw regret is in absolute risk units, so heavily mis-dosed patients dominate a naive mean. Decide whether to aggregate <code>normalized_regret</code>.</td></tr>
+<tr><td class="file">inspect_reward_separation.py</td><td>Standalone diagnostic: are the candidate therapies’ true rewards actually separated, or within sensor noise? Reports adjacent-rank gaps and rank stability.</td><td>Gate the benchmark with it: if adjacent therapies are within noise, spearman/regret just measure that noise. A near-tie fraction or sep-ratio &lt; 1 is a red flag.</td></tr>
+<tr><td class="file">run_all.py [core]</td><td>The original single-config end-to-end runner.</td><td>Superseded by the phase drivers for the sweep, but the cleanest single place to see the whole flow on one patient. <code>fast_config()</code> is the smoke path.</td></tr>
+<tr><td class="file">plotting.py [core] / run_multipatient.py</td><td>Figure library; standalone ground-truth ranking sweep.</td><td><code>plotting</code> is unreferenced by the pipeline (interactive figure library) — retained intentionally. Don’t treat “unused” as “dead.”</td></tr>
+<tr><td class="file">generate_patients.py</td><td>Generates <code>patients.csv</code>: every subset-average of the 10 base UVA/Padova adults (1013 synthetic patients), carb-error ON by default.</td><td>Each synthetic patient averages physiology and therapy constants of its parents — exactly why the carb-error perturbation is needed.</td></tr>
+</table>
+
+<h2>6 &nbsp; Consolidated verification checklist</h2>
+<p class="small">Passing tests do <strong>not</strong> mean the result is sound — tolerances are loose by design.</p>
+
+<div class="callout checks"><span class="lbl">Review checks — correctness of the scoring core &nbsp;<span class="small" style="text-transform:none;font-weight:400">(reviewed; unchanged)</span></span>
+<ul>
+<li>Reproduce the <code>value.py</code> anchors by hand (112.5 → reward ~0; sustained lows → high LBGI/TBR; highs → high HBGI/TAR; TIR+TBR+TAR ≈ 100%).</li>
+<li>Re-derive the unit conversions independently; spot-check one run’s <code>insulin_mU_kg_min</code> / <code>CHO_mg_kg_min</code>.</li>
+<li>Confirm metrics are computed on noise-free IG on both sides, and <code>RunResult.bg()</code> is the noise-free signal.</li>
+</ul>
+</div>
+
+<div class="callout checks"><span class="lbl">Review checks — fairness / no leakage (updated for the published prior)</span>
+<ul>
+<li>All three methods receive <strong>the same published prior</strong> (<code>replaybg_priors</code>), and <strong>no method trains on simglucose sims</strong>.</li>
+<li>Confirm the shared prior carries <strong>no cohort information</strong> — it is literature constants. (The old empirical-Bayes / leave-one-out concern is therefore moot.)</li>
+<li><code>group_kfold_indices</code>: no patient in both train and test; every patient tested once.</li>
+<li>Phase 1 labels are ReplayBG <strong>MAP</strong> projections (carry <code>proj_rmse</code>); Phase 0 labels are exact (<code>proj_rmse = 0</code>).</li>
+<li><span class="new">The old “lifted 2e-3” SI box bound no longer applies</span> — SI now follows the Gamma(3.3, 5e-4) prior; the <em>support</em> envelope tops out at ~4e-3. Confirm the support box never censors a fit.</li>
+<li><strong>Ordering enforced:</strong> verify <code>ka2&lt;kd</code> and <code>kabs&lt;kempt</code> hold for every MAP label (a <code>RuntimeWarning</code> fires otherwise) and that MCMC/SBI reject violations.</li>
+</ul>
+</div>
+
+<div class="callout checks"><span class="lbl">Review checks — MAP labels &amp; the published prior (new)</span>
+<ul>
+<li><strong>p2 is pinned by its prior</strong> and is therefore a near-constant, trivial regression target. Characterise per parameter which labels are likelihood-driven (SI, Gb, kabs) vs prior-driven (p2, partly SG); don’t credit a regressor for “predicting” a constant.</li>
+<li><strong>Shrinkage / centre:</strong> MAP pulls each fit toward the published (real-patient) centre, while the cohort is UVA/Padova projections. Overlay the MAP-fit histograms against the published densities and <strong>report how much the prior moved them</strong> — this is the trust argument and where a foreign centre would show up.</li>
+<li><strong><code>replaybg_model.VI = 0.126</code> vs upstream <code>0.135</code>:</strong> the priors were calibrated against upstream’s VI; this shifts steady-state <code>Ipb = Ib/(VI·ke)</code> by ~7%. Note it, or align VI for strict consistency with the prior’s source. (Flagged here as a prior-calibration property, not a change to the reviewed model file.)</li>
+<li><strong>Phase 1 is now mildly prior-informed</strong> (labels are MAP, not pure LS), so it is no longer a clean “data-only” contrast to the Bayesian twins. Fine for a benchmark, but state it.</li>
+<li><strong>Re-derive before trusting anything:</strong> old LS <code>rbg_*</code> columns are stale. Run <code>derive_replaybg_params</code> → rebuild Phase 1 dataset → re-run phases.</li>
+</ul>
+</div>
+
+<div class="callout checks"><span class="lbl">Review checks — a non-trivial, well-posed decision problem</span>
+<ul>
+<li>For each subject, the true optimum over the grid is interior, not an endpoint (<code>bolus_x0.70</code> or <code>x2.00</code>).</li>
+<li><code>bolus_x1.00</code> is rarely the per-patient best (the carb error did its job).</li>
+<li>No baseline run truncates into the worst-case padding; per-patient reward span clears the noise floor (<code>inspect_reward_separation.py</code>).</li>
+</ul>
+</div>
+
+<div class="callout checks"><span class="lbl">Review checks — the headline scientific claim actually fires</span>
+<ul>
+<li>Phase 0 (matched) scores near-ceiling while Phase 2 (mismatch) degrades — the designed gap, not a bug.</li>
+<li>Look for the dissociation: a twin with good trajectory RMSE but poor ranking (or vice versa). If fidelity and ranking move in lockstep, the experiment isn’t exercising the DT² thesis.</li>
+<li>Each twin actually tracks the identification CGM — open the fit figures; don’t trust RMSE alone. <span class="new">Expect Gb, SI, and now p2 to be well-pinned (the first two by data, p2 by its prior); the rest stay non-identifiable.</span></li>
+</ul>
+</div>
+
+<div class="callout checks"><span class="lbl">Review checks — reproducibility &amp; ops</span>
+<ul>
+<li>Seeds fixed everywhere; a given config reproduces its table exactly.</li>
+<li>Thread pinning (<code>OMP_NUM_THREADS=1</code> etc.) is set before forking the per-patient pools.</li>
+<li>Clear stale 168 h artifacts before re-running at the 24 h window. <span class="new">Also clear stale LS <code>rbg_*</code> columns / population <code>.npz</code> artifacts before the first MAP run.</span></li>
+</ul>
+</div>
+
+<h3>First commands to run (from the real repo root, env active)</h3>
+<pre>python -m experiments.generate_patients --out patients.csv
+python -m experiments.derive_replaybg_params --patients patients.csv      # re-derive MAP labels first
+python -m experiments.run_phase0 --patients patients.csv --smoke --limit 4
+python -m experiments.run_phase1 --patients patients.csv --smoke --limit 8 -j 4 --build
+python -m experiments.run_phase2 --patients patients.csv --smoke --limit 4
+python -m experiments.inspect_reward_separation --patients patients.csv --limit 8</pre>
+<p class="small">Run these smoke paths first to confirm the plumbing connects before a PROD sweep (many CPU-hours per patient).</p>
+
+<h2>7 &nbsp; Glossary</h2>
+<table>
+<tr><th>term</th><th>meaning</th></tr>
+<tr><td>DT² / decision transfer</td><td>Judging a twin by whether it ranks therapies like the real patient, rather than by trajectory fidelity. The project’s thesis.</td></tr>
+<tr><td>Plant</td><td>The ground-truth patient = simglucose (UVA/Padova). A black box that only emits CGM.</td></tr>
+<tr><td>Twin</td><td>A vector of 8 ReplayBG parameters (θ). Nothing more.</td></tr>
+<tr><td>ReplayBG</td><td>The simplified 8-parameter ODE model family all twins live in.</td></tr>
+<tr><td>“Φ not in F”</td><td>The structural-mismatch premise: the plant cannot be reproduced by any twin in the ReplayBG family. The intentional, central difficulty.</td></tr>
+<tr><td>θ</td><td>The 8 free ReplayBG parameters: ka2, kd, kempt, kabs, SG, SI, p2, Gb.</td></tr>
+<tr><td>IG / CGM / BG</td><td>Interstitial glucose (model output); CGM = IG + sensor noise; <code>RunResult.bg()</code> is the noise-free IG.</td></tr>
+<tr><td>Reward</td><td><code>-sum(risk)</code> over the horizon; maximised by a flat 112.5 mg/dL trace. The ranking objective.</td></tr>
+<tr><td>Spearman / regret</td><td>Rank correlation of twin-vs-true therapy ordering; true reward lost by following the twin’s top pick.</td></tr>
+<tr><td>Carb-counting error (m)</td><td>A deliberate per-patient mis-set of the programmed carb ratio so the optimal corrective bolus <code>f* ≈ m</code> is interior — makes ranking non-trivial.</td></tr>
+<tr><td>seen / unseen</td><td>Therapies near vs far from the baseline the twin was identified on; the optimum sits in “unseen” (a real extrapolation test).</td></tr>
+<tr><td>Phase 0 / 1 / 2</td><td>Matched-model ceiling (ReplayBG plant) / amortised regressors / per-instance MCMC &amp; SBI under the real mismatch.</td></tr>
+<tr><td>MCMC / SBI / TCN·ridge</td><td>Per-instance Bayesian posterior / amortised neural posterior / amortised point estimate of θ.</td></tr>
+<tr><td class="new">Published prior</td><td class="new">The shared, leakage-free ReplayBG prior taken directly from Cappon et al. (2023) (in <code>replaybg_priors.py</code>): LogNormal rates, Gamma SI, TruncNormal Gb, √-Normal p2, with <code>ka2&lt;kd</code> / <code>kabs&lt;kempt</code> ordering gates. Replaces the former cohort-derived empirical-Bayes prior.</td></tr>
+<tr><td class="new">MAP fit</td><td class="new">The per-patient label fit (<code>fit_replaybg</code>): penalised least-squares = maximum-a-posteriori θ under the Gaussian CGM likelihood and the published prior. Replaces the former plain least-squares fit.</td></tr>
+<tr><td class="new">Support envelope</td><td class="new"><code>SUPPORT_LO/HI</code> — a generous physical box that only bounds the optimiser / clamps MCMC walkers. <strong>Not</strong> a prior; the informative prior does the regularising.</td></tr>
+</table>
+
+<p class="small" style="margin-top:14pt">Built from a direct read of the source and the markdown design docs (current as of <code>MAP_published_prior_refactor_6_27.md</code>). The <code>value.py</code> / <code>evaluate.py</code> / <code>replaybg_model.py</code> sections reflect the completed first review phase and are unchanged. Embedded instructions in the project PDFs were ignored. Where a handoff and a dated note disagreed, the dated note was treated as current; where two dated notes disagreed, the later date won.</p>
+
+</body>
+</html>

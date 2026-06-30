@@ -1,7 +1,39 @@
-simglucose
-lmfit
-scipy
-pandas
-numpy
-matplotlib
-setuptools<81
+# =============================================================================
+# T1D decision-targeted twinning benchmark — dependencies
+#
+# Install:   pip install -r requirements.txt
+#
+# Tested-good versions (this environment) are noted per line. The floors below
+# are the safe minimums; pin to the tested versions if you need exact repro.
+# =============================================================================
+
+# --- core scientific stack ---------------------------------------------------
+numpy>=1.24          # tested 2.4.4
+scipy>=1.10          # tested 1.17.1   (least-squares ReplayBG fit in population.py)
+pandas>=1.5          # tested 3.0.2
+matplotlib>=3.6      # tested 3.10.8
+
+# --- ground-truth simulator (complex model: UVA/Padova) ----------------------
+# simglucose also pulls in gym + pathos transitively; gymnasium is its RL env API.
+simglucose==0.2.11   # pinned: the patient/Quest CSV layout is version-sensitive
+gymnasium>=0.29      # tested 0.29.1
+
+# --- twinning methods --------------------------------------------------------
+emcee>=3.1           # tested 3.1.6    (MCMC twin)
+torch>=2.2           # tested 2.12.0   (SBI + TCN twins; see GPU note below)
+sbi>=0.23,<0.27      # tested 0.26.1   (SBI / neural posterior estimation)
+
+# =============================================================================
+# Notes
+# -----------------------------------------------------------------------------
+# torch: the line above installs the default CPU/GPU wheel for your platform.
+#   For a specific CUDA build, install torch separately from pytorch.org first,
+#   e.g.  pip install torch --index-url https://download.pytorch.org/whl/cu121
+#   then  pip install -r requirements.txt
+#
+# sbi: capped below 0.27 because the experiment code uses the SNPE alias and the
+#   reject_outside_prior=False sampling kwarg; verify if you move to a newer sbi.
+#
+# Python: tested on CPython 3.12. simglucose's gym dependency can be awkward on
+#   very new Python — 3.10–3.12 is the safe range.
+# =============================================================================
