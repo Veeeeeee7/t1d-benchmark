@@ -1,15 +1,15 @@
 """Phase 0, final stage — score a subject's saved twins against the
 self-consistent **ReplayBG** ground truth over the candidate grid, and write the
-per-subject comparison table that ``run_phase0`` aggregates.
+per-subject comparison table that ``run_phase0_twins`` aggregates.
 
-Mirror of ``compute_results.py`` with one change: the ground-truth candidate
+Mirror of ``compute_results_phase2.py`` with one change: the ground-truth candidate
 runs come from ``replaybg_plant.ground_truth`` (the matched-model plant) rather
 than ``exp_common.subject_ground_truth`` (simglucose). The scoring object
 (``evaluate_twin``), the metric columns, and the output format are identical, so
 the aggregation in ``phase_runner`` is reused unchanged.
 
 Run (from the repo root):
-    python -m experiments.compute_results0 --patients patients0.csv --patient rbg0001
+    python -m experiments.compute_results_phase0 --patients patients0.csv --patient rbg0001
 """
 from __future__ import annotations
 
@@ -26,39 +26,23 @@ import pandas as pd
 
 from experiments import exp_common as C            # paths, factor grids, (de)serialization
 from experiments import replaybg_plant as P        # the ReplayBG plant
-from experiments import phase0_paths as P0        # phase0-namespaced paths
+from experiments import output_paths as OP        # standardized layout (phase-tagged)
 from t1d_twin import value
 from t1d_twin import plotting
 from t1d_twin.evaluate import (
-    evaluate_twin, _row_from_result, ranking, TABLE_COLUMNS)
-from t1d_twin.run_all import _df_to_markdown
+    evaluate_twin, _row_from_result, ranking, TABLE_COLUMNS,
+    df_to_markdown, dt2_summary)
 
 _LOADER_KEYS = [("mcmc", "mcmc", C.load_mcmc),
                 ("sbi", "sbi", C.load_sbi)]
 
 
 def _resolve(patient: str, patients_csv: str) -> P.Phase0Subject:
+    """Look up one Phase-0 subject by name in the cohort CSV (KeyError if absent)."""
     subs = {s.name: s for s in P.load_phase0_cohort(patients_csv)}
     if patient not in subs:
         raise KeyError(f"patient {patient!r} not in {patients_csv}")
     return subs[patient]
-
-
-def dt2_summary(table: pd.DataFrame) -> str:
-    """Flag any decision-vs-fidelity dissociation (the headline DT2 claim)."""
-    methods = list(table.index)
-    if len(methods) < 2:
-        return "  (need >= 2 methods to assess decision-vs-fidelity dissociation)"
-    by_fidelity = sorted(methods, key=lambda m: table.loc[m, "rmse"])
-    by_decision = sorted(methods, key=lambda m: -table.loc[m, "spearman"])
-    lines = [f"  best trajectory fidelity (RMSE): {by_fidelity[0]}",
-             f"  best decision quality   (Spearman): {by_decision[0]}"]
-    if by_fidelity[0] != by_decision[0]:
-        lines.append("  >> DISSOCIATION: the most faithful twin is NOT the best "
-                     "ranker — DT2 thesis in action.")
-    else:
-        lines.append("  no dissociation in this run (fidelity and ranking agree).")
-    return "\n".join(lines)
 
 
 def score_subject(subject, hours, bolus_factors, basal_factors, seed=P.SEED):
@@ -73,7 +57,7 @@ def score_subject(subject, hours, bolus_factors, basal_factors, seed=P.SEED):
     true_rank = ranking(true_rewards)
     seen, unseen = C.seen_unseen(bolus_factors, basal_factors)
 
-    paths = P0.artifact_paths(subject)
+    paths = OP.twin_artifact_paths(OP.PHASE0, subject.safe_name)
     rows, details = {}, {}
     for name, key, loader in _LOADER_KEYS:
         if not os.path.exists(paths[key]):
@@ -102,7 +86,7 @@ def write_outputs(subject, hours, table, details, true_rank, seen, unseen):
       * ``ig_overlay_<method>.png`` -- ReplayBG plant IG (solid) vs twin IG
         (dashed) for every therapy, one per twinning method.
     """
-    rdir = P0.results_dir_for(subject)
+    rdir = OP.results_dir(OP.PHASE0, subject.safe_name)
     os.makedirs(rdir, exist_ok=True)
     table.to_csv(os.path.join(rdir, "comparison_table.csv"))
 
@@ -122,7 +106,7 @@ def write_outputs(subject, hours, table, details, true_rank, seen, unseen):
         fh.write(f"Methods scored: {', '.join(table.index)}.\n\n")
         fh.write(f"True ranking (best->worst): {', '.join(true_rank)}\n\n")
         fh.write("## Comparison table\n\n")
-        fh.write(_df_to_markdown(table) + "\n\n")
+        fh.write(df_to_markdown(table) + "\n\n")
         fh.write("## Decision vs fidelity (DT2)\n\n")
         fh.write("```\n" + dt2_summary(table) + "\n```\n\n")
         if figs:
@@ -135,6 +119,7 @@ def write_outputs(subject, hours, table, details, true_rank, seen, unseen):
 
 
 def main() -> None:
+    """CLI: score the saved Phase-0 twin(s) for one patient and write the comparison table, notes, and IG-overlay figures."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true", help="smoke grid + horizon")
     ap.add_argument("--patients", required=True, help="phase0 cohort CSV (patients0.csv)")
@@ -149,7 +134,7 @@ def main() -> None:
     scored = score_subject(subject, hours, bolus_factors, basal_factors)
     if scored is None:
         print(f"[results0] no twin artifacts for {subject.name} in "
-              f"{P0.artifact_paths(subject)['dir']} — run run_mcmc0 / run_sbi0 first.")
+              f"{OP.twin_artifact_paths(OP.PHASE0, subject.safe_name)['dir']} — run run_mcmc_phase0 / run_sbi_phase0 first.")
         sys.exit(1)
     table, details, true_rank, seen, unseen = scored
 

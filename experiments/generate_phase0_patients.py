@@ -56,12 +56,14 @@ def main() -> None:
     P.write_phase0_csv(subs, args.out)
 
     # report the over/under split and per-m counts (mirrors generate_patients.py)
+    # Carb error sign convention (see patients.py): m < 1 -> programmed CR too low
+    # -> over-doses; m > 1 -> programmed CR too high -> under-doses.
     mults = [s.dose_mult for s in subs]
-    over = sum(1 for m in mults if m > 1.0)
-    under = sum(1 for m in mults if m < 1.0)
+    over = sum(1 for m in mults if m < 1.0)
+    under = sum(1 for m in mults if m > 1.0)
     counts = Counter(mults)
     print(f"\n[phase0-gen] wrote {len(subs)} patients -> {args.out}")
-    print(f"[phase0-gen] carb error: {over} over-dosed (m>1) / {under} under-dosed (m<1)")
+    print(f"[phase0-gen] carb error: {over} over-dosed (m<1) / {under} under-dosed (m>1)")
     print("[phase0-gen] per-m counts: "
           + ", ".join(f"m={m}: {counts[m]}" for m in sorted(counts)))
     crs = [s.CR_true for s in subs]

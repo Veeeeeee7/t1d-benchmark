@@ -2,11 +2,13 @@
 # =============================================================================
 # run_phase1.sh — Phase 1 only (amortized baselines: K-fold CV + scoring).
 #
-# Single CPU job on one whole c64-m512 node. The two expensive parts of phase 1
-# are pure simglucose and are now fanned across all cores of the node:
+# Single job on one b200 GPU node. The K-fold CV that trains the TCN baseline
+# uses the GPU (run_phase1.py defaults --device to cuda when available); the two
+# expensive CPU parts of phase 1 are pure simglucose and are fanned across all
+# cores of the node:
 #     * build_phase1_dataset : one baseline sim + ReplayBG projection / patient
 #     * run_phase1 scoring    : collect_truth (|Pi| x 168 h) + score / patient
-# The K-fold CV that trains the baselines is cheap (~seconds) and stays serial.
+# The ridge baseline's CV is cheap (~seconds) and stays serial.
 #
 # Parallelism model: ONE process per core (set by --cpus-per-task), each pinned
 # to a SINGLE BLAS/OMP thread so 64 worker processes don't each spawn 64 threads
@@ -28,7 +30,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=480G
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --output=/scratch/vmli3/t1d_experiment/logs/phase1/%x_%j.out
 #SBATCH --error=/scratch/vmli3/t1d_experiment/logs/phase1/%x_%j.err
 #SBATCH --mail-user victor.li@emory.edu
@@ -67,7 +69,7 @@ mkdir -p "$T1D_OUTPUT_ROOT/logs/phase1"   # this phase's SLURM log dir
 
 # worker count = all allocated cores unless JOBS overrides it
 JOBS="${JOBS:-${SLURM_CPUS_PER_TASK:-1}}"
-echo "[phase1] using $JOBS worker process(es) on partition c64-m512"
+echo "[phase1] using $JOBS worker process(es) on partition b200 (GPU for CV)"
 
 if [[ ! -d experiments ]]; then echo "run from the repo root" >&2; exit 1; fi
 

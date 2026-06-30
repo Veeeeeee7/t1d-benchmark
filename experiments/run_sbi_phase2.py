@@ -39,6 +39,7 @@ import torch
 from sbi.inference import SNPE
 
 from . import exp_common as C
+from . import output_paths as OP        # standardized layout (phase-tagged)
 from t1d_twin import identify_sbi as S
 from t1d_twin.identify_sbi import make_prior, generate_training_data, SBITwin
 
@@ -137,7 +138,7 @@ def main() -> None:
           f"SI median = {s['SI']['median']:.2e}")
     print(f"[sbi] fit RMSE vs identification CGM = {C.fit_rmse(twin, run):.2f} mg/dL")
 
-    path = C.save_sbi(twin, C.artifact_paths(subject)["sbi"])
+    path = C.save_sbi(twin, OP.twin_artifact_paths(OP.PHASE2, subject.safe_name)["sbi"])
     print(f"[sbi] saved -> {path}")
 
 

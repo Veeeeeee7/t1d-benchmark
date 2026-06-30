@@ -56,7 +56,7 @@ DEFAULT_PARTS = os.path.join(C.ARTIFACT_DIR, "rbg_fits")
 # Per-patient fit (one worker)
 # ---------------------------------------------------------------------------
 def _fit_one(task):
-    """Baseline run -> ReplayBG LS fit -> (theta, rmse, Ib, CR_true)."""
+    """Baseline run -> ReplayBG MAP fit -> (theta, rmse, Ib, CR_true)."""
     s, hours, dt, max_nfev, parts_dir, overwrite = task
     part = os.path.join(parts_dir, f"{s.safe_name}.npz")
     if os.path.exists(part) and not overwrite:

@@ -21,6 +21,7 @@ if os.path.isdir(os.path.join(_root, "t1d_twin")) and _root not in sys.path:
     sys.path.insert(0, _root)
 
 from . import exp_common as C
+from . import output_paths as OP        # standardized layout (phase-tagged)
 from t1d_twin.identify_mcmc import identify_twin_from_run
 
 # Production vs smoke hyperparameters -------------------------------------------------
@@ -58,7 +59,7 @@ def main() -> None:
           f"SI median = {s['SI']['median']:.2e}")
     print(f"[mcmc] fit RMSE vs identification CGM = {C.fit_rmse(twin, run):.2f} mg/dL")
 
-    path = C.save_mcmc(twin, C.artifact_paths(subject)["mcmc"])
+    path = C.save_mcmc(twin, OP.twin_artifact_paths(OP.PHASE2, subject.safe_name)["mcmc"])
     print(f"[mcmc] saved -> {path}")
 
 

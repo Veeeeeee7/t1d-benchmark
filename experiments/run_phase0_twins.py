@@ -7,15 +7,15 @@ quality from the plant<->twin mismatch that Phase 2 deliberately includes, so it
 is the "best case" reference the Phase 2 numbers should be read against.
 
 Same running method as Phase 2: shard with ``--start`` / ``--limit`` (one chunk
-per node, as ``run_phase0.sh`` does), each shard resumable (skips patients
+per node, as ``run_phase0_twins.sh`` does), each shard resumable (skips patients
 already scored), then aggregate the full set:
 
-    python -m experiments.run_phase0 --patients patients.csv --aggregate-only
+    python -m experiments.run_phase0_twins --patients patients.csv --aggregate-only
 
 Run (from the repo root):
     python -m experiments.derive_replaybg_params --patients patients.csv   # adds rbg_* cols
-    python -m experiments.run_phase0 --patients patients.csv --start 0 --limit 256
-    python -m experiments.run_phase0 --patients patients.csv --smoke --limit 4
+    python -m experiments.run_phase0_twins --patients patients.csv --start 0 --limit 256
+    python -m experiments.run_phase0_twins --patients patients.csv --smoke --limit 4
 """
 from __future__ import annotations
 
@@ -31,15 +31,16 @@ if os.path.isdir(os.path.join(_root, "t1d_twin")) and _root not in sys.path:
 from experiments import exp_common as C
 from experiments import phase_runner as PR
 from experiments import replaybg_plant as P
-from experiments import phase0_paths as P0
+from experiments import output_paths as OP
 
 # Phase 0 stages (ReplayBG plant) + scoring module — passed to the shared runner.
-STAGES = {"mcmc": "experiments.run_mcmc0",
-          "sbi": "experiments.run_sbi0"}
-RESULTS_MODULE = "experiments.compute_results0"
+STAGES = {"mcmc": "experiments.run_mcmc_phase0",
+          "sbi": "experiments.run_sbi_phase0"}
+RESULTS_MODULE = "experiments.compute_results_phase0"
 
 
 def main() -> None:
+    """CLI: run the Phase-0 per-instance sweep (MCMC + SBI over the cohort, ReplayBG plant), sharded and resumable."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--patients", required=True, help="augmented patients.csv (rbg_* cols from derive_replaybg_params) or a native phase0 cohort")
     ap.add_argument("--methods", default="mcmc,sbi")
@@ -67,7 +68,7 @@ def main() -> None:
                  skip_existing=not args.no_skip, aggregate_only=args.aggregate_only,
                  stages=STAGES, results_module=RESULTS_MODULE,
                  load_subjects=P.load_phase0_cohort,
-                 results_dir_fn=P0.results_dir_for)
+                 results_dir_fn=lambda s: OP.results_dir(OP.PHASE0, s.safe_name))
 
 
 if __name__ == "__main__":

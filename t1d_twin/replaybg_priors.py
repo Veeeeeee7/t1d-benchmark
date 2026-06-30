@@ -309,10 +309,11 @@ def log_prior_phi(phi_batch: np.ndarray) -> np.ndarray:
 
 
 def _norm_logpdf(x, mu, sd):
+    """Log-density of a Normal(mu, sd), evaluated elementwise."""
     return -0.5 * ((x - mu) / sd) ** 2 - np.log(sd) - 0.5 * np.log(2.0 * np.pi)
-s
 
 def _gamma_logpdf(z, k, scale):
+    """Log-density of a Gamma(shape=k, scale) on z>0 (-inf for z<=0), via gammaln."""
     z = np.asarray(z, dtype=float)
     out = np.full_like(z, -np.inf)
     pos = z > 0
@@ -322,10 +323,12 @@ def _gamma_logpdf(z, k, scale):
 
 
 def _phi_norm_cdf(x, mu, sd):
+    """Standard-normal-based CDF helper, Phi((x-mu)/sd), used to normalise the truncated Normal."""
     return 0.5 * (1.0 + erf((x - mu) / (sd * np.sqrt(2.0))))
 
 
 def _truncnorm_logpdf(x, mu, sd, a, b):
+    """Log-density of a Normal(mu, sd) truncated to [a, b] (-inf outside), normalised by the in-interval mass."""
     x = np.asarray(x, dtype=float)
     out = np.full_like(x, -np.inf)
     inside = (x >= a) & (x <= b)
@@ -356,6 +359,7 @@ class _ReplayBGSbiPrior:
     """
 
     def __init__(self, seed: int | None = None):
+        """Lazily import torch and set up the phi-space prior (event/batch shapes, dim=8, seeded RNG) so the module stays importable without torch."""
         import torch
         self._torch = torch
         self.event_shape = torch.Size([8])
@@ -367,6 +371,7 @@ class _ReplayBGSbiPrior:
 
     # -- sampling (phi-space) ------------------------------------------------
     def _draw_np(self, n: int) -> np.ndarray:
+        """Draw n phi-space samples from the published marginals (LogNormal rates, sqrt-Normal p2, Gamma SI, truncated-Normal Gb) before ordering rejection."""
         rng = self._rng
         phi = np.empty((n, 8))
         for i in _LOGNORMAL_RATE_IDX:
@@ -387,6 +392,7 @@ class _ReplayBGSbiPrior:
         return phi
 
     def sample(self, sample_shape=None):
+        """Sample phi from the published prior, rejecting draws that violate ka2<kd or kabs<kempt; returns a torch tensor shaped to sample_shape."""
         torch = self._torch
         if sample_shape is None or len(tuple(sample_shape)) == 0:
             n = 1
@@ -408,6 +414,7 @@ class _ReplayBGSbiPrior:
         return out[0] if squeeze else out.reshape(*tuple(sample_shape), 8)
 
     def log_prob(self, phi):
+        """Evaluate the published prior log-density at phi (ordering-rejection normaliser dropped as a constant); returns a torch tensor."""
         torch = self._torch
         arr = np.atleast_2d(np.asarray(phi.detach().cpu().numpy(), dtype=float)) \
             if hasattr(phi, "detach") else np.atleast_2d(np.asarray(phi, dtype=float))

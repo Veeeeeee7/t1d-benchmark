@@ -26,6 +26,13 @@ from .simglucose_adapter import RunResult
 
 TABLE_COLUMNS = ("spearman", "regret", "rmse", "mard")
 
+# The four metrics split into the two families the DT2 thesis contrasts:
+# decision-quality (how well the twin *ranks* therapies) vs trajectory-fidelity
+# (how closely it reproduces the IG curve). Centralized here so every runner and
+# results module shares one definition instead of redeclaring its own copy.
+DECISION_COLS = ["spearman", "regret"]
+FIDELITY_COLS = ["rmse", "mard"]
+
 
 # ===========================================================================
 # Helpers
@@ -276,3 +283,48 @@ def run_experiment(
     table.attrs["true_rewards"] = true_rewards
     table.attrs["true_ranking"] = ranking(true_rewards)
     return table
+
+# ===========================================================================
+# Reporting helpers (shared by the per-patient results modules)
+# ===========================================================================
+
+def df_to_markdown(table, floatfmt: str = "{:.3g}") -> str:
+    """Render a metrics DataFrame (indexed by method) as a GitHub Markdown table."""
+    cols = list(table.columns)
+    header = "| method | " + " | ".join(cols) + " |"
+    sep = "| " + " | ".join(["---"] * (len(cols) + 1)) + " |"
+    lines = [header, sep]
+    for method, row in table.iterrows():
+        cells = []
+        for c in cols:
+            v = row[c]
+            if v is None or (isinstance(v, float) and not np.isfinite(v)):
+                cells.append("—" if v is None else "nan")
+            elif isinstance(v, (int, float, np.floating, np.integer)):
+                cells.append(floatfmt.format(float(v)))
+            else:
+                cells.append(str(v))
+        lines.append(f"| {method} | " + " | ".join(cells) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def dt2_summary(table) -> str:
+    """Flag any decision-vs-fidelity dissociation (the headline DT2 claim).
+
+    Compares which method wins on trajectory fidelity (lowest RMSE) vs decision
+    quality (highest Spearman); a mismatch is the DT2 thesis in action. Shared by
+    both per-patient results modules (Phase 0 and Phase 2 score identically).
+    """
+    methods = list(table.index)
+    if len(methods) < 2:
+        return "  (need >= 2 methods to assess decision-vs-fidelity dissociation)"
+    by_fidelity = sorted(methods, key=lambda m: table.loc[m, "rmse"])
+    by_decision = sorted(methods, key=lambda m: -table.loc[m, "spearman"])
+    lines = [f"  best trajectory fidelity (RMSE): {by_fidelity[0]}",
+             f"  best decision quality   (Spearman): {by_decision[0]}"]
+    if by_fidelity[0] != by_decision[0]:
+        lines.append("  >> DISSOCIATION: the most faithful twin is NOT the best "
+                     "ranker — DT2 thesis in action.")
+    else:
+        lines.append("  no dissociation in this run (fidelity and ranking agree).")
+    return "\n".join(lines)

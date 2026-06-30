@@ -30,7 +30,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=480G
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --output=/scratch/vmli3/t1d_experiment/logs/phase0_ml/%x_%j.out
 #SBATCH --error=/scratch/vmli3/t1d_experiment/logs/phase0_ml/%x_%j.err
 #SBATCH --mail-user victor.li@emory.edu

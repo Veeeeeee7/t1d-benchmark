@@ -16,7 +16,7 @@
 #   4. phase1/dataset.npz           amortized dataset (simglucose plant)   [phase 1]
 #   5. phase0_ml/dataset.npz        amortized dataset (ReplayBG plant)     [phase 0 ML]
 #
-# Ordering matters: the rbg_* fit (step 2) is the ONE per-patient least-squares
+# Ordering matters: the rbg_* fit (step 2) is the ONE per-patient MAP-fit
 # pass, run BEFORE the population (step 3, which just aggregates those cached
 # fits), before build_phase1_dataset (step 4, reads the cached fit as its target),
 # and before build_phase0_dataset (step 5, the matched cohort). Every step is
@@ -36,13 +36,13 @@
 # =============================================================================
 
 #SBATCH --job-name=t1d_prep
-#SBATCH --account=ai-gpu
+#SBATCH --account=general
 #SBATCH --partition=c64-m512
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=480G
-#SBATCH --time=1-00:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --output=/scratch/vmli3/t1d_experiment/logs/prep/%x_%j.out
 #SBATCH --error=/scratch/vmli3/t1d_experiment/logs/prep/%x_%j.err
 #SBATCH --mail-user victor.li@emory.edu
@@ -112,7 +112,7 @@ fi
 
 # --- 3. population prior (all phases: centre + prior box) -------------
 # Aggregates the cached per-patient rbg_* fits from step 2 — NO re-fitting — so
-# the population centre and prior live at the SAME 24 h LS parameters used by the
+# the population centre and prior live at the SAME 24 h MAP parameters used by the
 # Phase 0 matched plant and the Phase 1 regression target. (Requires step 2.)
 if [[ -f "$POP" ]]; then
     echo "[prep 3/5] population prior exists: $POP"

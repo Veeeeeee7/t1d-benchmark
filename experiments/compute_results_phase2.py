@@ -8,11 +8,12 @@ scores the default adult#001. Outputs go to ``results/phase2/<patient>/`` so
 multiple patients never clobber each other (and Phase 0's matched cohort, which
 shares patient names, sits under ``results/phase0/<patient>/``).
 
-The reusable :func:`score_subject` is also called by ``run_suite.py``.
+The reusable :func:`score_subject` is the scoring step the Phase 2 aggregate
+runner (``run_phase2``) invokes per patient.
 
 Run (from the repo root):
-    python -m experiments.compute_results --smoke
-    python -m experiments.compute_results --patients patients.csv --patient synth0001_k2
+    python -m experiments.compute_results_phase2 --smoke
+    python -m experiments.compute_results_phase2 --patients patients.csv --patient synth0001_k2
 """
 from __future__ import annotations
 
@@ -28,31 +29,15 @@ if os.path.isdir(os.path.join(_root, "t1d_twin")) and _root not in sys.path:
 import pandas as pd
 
 from . import exp_common as C
+from . import output_paths as OP
 from t1d_twin import value
 from t1d_twin import plotting
 from t1d_twin.evaluate import (
-    evaluate_twin, _row_from_result, ranking, TABLE_COLUMNS)
-from t1d_twin.run_all import _df_to_markdown
+    evaluate_twin, _row_from_result, ranking, TABLE_COLUMNS,
+    df_to_markdown, dt2_summary)
 
 _LOADER_KEYS = [("mcmc", "mcmc", C.load_mcmc),
                 ("sbi", "sbi", C.load_sbi)]
-
-
-def dt2_summary(table: pd.DataFrame) -> str:
-    """Flag any decision-vs-fidelity dissociation (the headline DT2 claim)."""
-    methods = list(table.index)
-    if len(methods) < 2:
-        return "  (need >= 2 methods to assess decision-vs-fidelity dissociation)"
-    by_fidelity = sorted(methods, key=lambda m: table.loc[m, "rmse"])
-    by_decision = sorted(methods, key=lambda m: -table.loc[m, "spearman"])
-    lines = [f"  best trajectory fidelity (RMSE): {by_fidelity[0]}",
-             f"  best decision quality   (Spearman): {by_decision[0]}"]
-    if by_fidelity[0] != by_decision[0]:
-        lines.append("  >> DISSOCIATION: the most faithful twin is NOT the best "
-                     "ranker — DT2 thesis in action.")
-    else:
-        lines.append("  no dissociation in this run (fidelity and ranking agree).")
-    return "\n".join(lines)
 
 
 def score_subject(subject, hours, bolus_factors, basal_factors, seed=C.SEED):
@@ -65,7 +50,7 @@ def score_subject(subject, hours, bolus_factors, basal_factors, seed=C.SEED):
     true_rank = ranking(true_rewards)
     seen, unseen = C.seen_unseen(bolus_factors, basal_factors)
 
-    paths = C.artifact_paths(subject)
+    paths = OP.twin_artifact_paths(OP.PHASE2, subject.safe_name)
     rows, details = {}, {}
     for name, key, loader in _LOADER_KEYS:
         if not os.path.exists(paths[key]):
@@ -95,7 +80,7 @@ def write_outputs(subject, hours, table, details, true_rank, seen, unseen):
       * ``ig_overlay_<method>.png`` -- plant IG (solid) vs twin IG (dashed) for
         every therapy, one per twinning method.
     """
-    rdir = C.results_dir_for(subject)
+    rdir = OP.results_dir(OP.PHASE2, subject.safe_name)
     os.makedirs(rdir, exist_ok=True)
     table.to_csv(os.path.join(rdir, "comparison_table.csv"))
 
@@ -113,7 +98,7 @@ def write_outputs(subject, hours, table, details, true_rank, seen, unseen):
         fh.write(f"Methods scored: {', '.join(table.index)}.\n\n")
         fh.write(f"True ranking (best->worst): {', '.join(true_rank)}\n\n")
         fh.write("## Comparison table\n\n")
-        fh.write(_df_to_markdown(table) + "\n\n")
+        fh.write(df_to_markdown(table) + "\n\n")
         fh.write("## Decision vs fidelity (DT2)\n\n")
         fh.write("```\n" + dt2_summary(table) + "\n```\n\n")
         if figs:
@@ -126,6 +111,7 @@ def write_outputs(subject, hours, table, details, true_rank, seen, unseen):
 
 
 def main() -> None:
+    """CLI: score the saved Phase-2 twin(s) for one patient and write the comparison table, notes, and IG-overlay figures."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true", help="1-day horizon (match smoke fits)")
     C.add_subject_args(ap)
@@ -139,7 +125,7 @@ def main() -> None:
     scored = score_subject(subject, hours, bolus_factors, basal_factors)
     if scored is None:
         print(f"[results] no twin artifacts for {subject.name} in "
-              f"{C.artifact_paths(subject)['dir']} — run the run_* scripts first.")
+              f"{OP.twin_artifact_paths(OP.PHASE2, subject.safe_name)['dir']} — run the run_* scripts first.")
         sys.exit(1)
     table, details, true_rank, seen, unseen = scored
 

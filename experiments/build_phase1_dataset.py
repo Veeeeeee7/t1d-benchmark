@@ -128,6 +128,7 @@ def build_dataset(subjects, hours: float = C.WINDOW_HOURS, dt: float = C.DT,
     t0 = time.time()
 
     def _note(i, res):
+        """Progress callback: when verbose, print every 10th patient's therapy count + projection RMSE and elapsed time."""
         if verbose and ((i + 1) % 10 == 0 or n <= 12):
             print(f"  [{i + 1}/{n}] {res[0]}: {len(res[1])} therapies, "
                   f"proj RMSE={res[7]:.1f} mg/dL ({time.time() - t0:.0f}s elapsed)",
@@ -163,6 +164,7 @@ def build_dataset(subjects, hours: float = C.WINDOW_HOURS, dt: float = C.DT,
               f"truncating all channels to L={L}")
 
     def _stack(seq):
+        """Stack a list of per-example arrays into one (M, L) array, truncating each to the common length L."""
         return np.stack([a[:L] for a in seq], axis=0)
 
     return {
@@ -187,12 +189,14 @@ def build_dataset(subjects, hours: float = C.WINDOW_HOURS, dt: float = C.DT,
 
 
 def save_dataset(d: dict, path: str) -> str:
+    """Save the dataset dict to an .npz file; returns the path."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     np.savez(path, **d)
     return path
 
 
 def load_dataset(path: str) -> dict:
+    """Load a dataset .npz back into a dict, restoring scalar floats (hours / sample_time / dt)."""
     z = np.load(path, allow_pickle=True)
     d = {k: z[k] for k in z.files}
     for k in ("hours", "sample_time", "dt"):
@@ -205,6 +209,7 @@ def load_dataset(path: str) -> dict:
 # CLI
 # ---------------------------------------------------------------------------
 def main() -> None:
+    """CLI: build the Phase-1 (simglucose-plant) treatment-augmented dataset and save it as .npz."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--patients", required=True, help="patients.csv to build from")
     ap.add_argument("--out", default=DEFAULT_OUT, help="output .npz path")

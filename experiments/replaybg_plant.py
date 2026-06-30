@@ -44,18 +44,18 @@ from t1d_twin import replaybg_priors as _priors
 from t1d_twin import value
 
 # ---------------------------------------------------------------------------
-# Fixed Phase-0 reference centre.
+# Phase-0 reference centre.
 #
 # Phase 0 is the controlled, matched-model study: there is no cohort to derive a
 # population from, so the synthetic plants (``draw_theta``) and the MCMC walker
-# init are both centred on this fixed, physiologically plausible reference point
-# (the value that used to be ``replaybg_model.POP_THETA``). Phase-0 entry points
-# install it explicitly via ``replaybg_model.set_pop_theta(PHASE0_CENTER)``.
+# init are both centred on this reference point. It is the **published prior
+# centre** (``replaybg_priors.prior_center()``) — i.e. the SAME centre Phase 2
+# installs via ``population.install_published_prior`` — so Phase 0 and Phase 2
+# share one centre and there is no longer a separate hand-set value to keep in
+# sync. Phase-0 entry points install it explicitly via
+# ``replaybg_model.set_pop_theta(PHASE0_CENTER)``.
 # ---------------------------------------------------------------------------
-PHASE0_CENTER = {
-    "ka2": 0.014, "kd": 0.026, "kempt": 0.18, "kabs": 0.012,
-    "SG": 0.02, "SI": 1.2e-4, "p2": 0.012, "Gb": 120.0,
-}
+PHASE0_CENTER = _priors.prior_center()
 
 # ---------------------------------------------------------------------------
 # Cadence / horizon / identity  (mirrors experiments.exp_common)
@@ -75,8 +75,8 @@ BASAL_DEFAULT = 0.20     # basal insulin [mU/kg/min]
 CR_NOMINAL = 10.0        # nominal carb ratio used only as the calibration anchor
 
 # prior bounds (identical to identify_mcmc / identify_sbi)
-PRIOR_LO = np.array([1e-3, 1e-3, 2e-2, 1e-3, 1e-3, 1e-5, 1e-3,  80.0])
-PRIOR_HI = np.array([5e-2, 8e-2, 6e-1, 8e-2, 5e-2, 2e-3, 5e-2, 200.0])
+PRIOR_LO = _priors.SUPPORT_LO.copy()
+PRIOR_HI = _priors.SUPPORT_HI.copy()
 
 # carb-error multiplier set (identical to patients.DEFAULT_CARB_ERROR_CHOICES)
 DEFAULT_CARB_ERROR_CHOICES = (0.75, 0.85, 1.25, 1.50)
@@ -311,8 +311,8 @@ def draw_theta(name: str) -> np.ndarray:
     additive spread for Gb, all clipped strictly inside the prior box so
     identification is well-posed.
 
-    Phase-0 entry points install :data:`PHASE0_CENTER` (the fixed controlled
-    reference) before calling this; if nothing is installed, ``get_pop_theta``
+    Phase-0 entry points install :data:`PHASE0_CENTER` (the published prior
+    centre) before calling this; if nothing is installed, ``get_pop_theta``
     raises rather than silently using a default.
     """
     rng = _hash_rng(name, salt="theta")

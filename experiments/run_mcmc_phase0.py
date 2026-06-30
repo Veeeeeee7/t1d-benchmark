@@ -1,13 +1,13 @@
 """Phase 0, stage 1/2 — identify the **MCMC** twin on the matched-model plant.
 
-Identical to ``run_mcmc.py`` except the identification run comes from the
+Identical to ``run_mcmc_phase2.py`` except the identification run comes from the
 self-consistent ReplayBG plant (``replaybg_plant``) instead of simglucose, so
 the twin fits data drawn from its own model class (no plant<->twin mismatch).
-The posterior is serialized to the per-subject artifact for ``compute_results0``.
+The posterior is serialized to the per-subject artifact for ``compute_results_phase0``.
 
 Run (from the repo root):
-    python -m experiments.run_mcmc0 --patients patients0.csv --patient rbg0001
-    python -m experiments.run_mcmc0 --patients patients0.csv --patient rbg0001 --smoke
+    python -m experiments.run_mcmc_phase0 --patients patients0.csv --patient rbg0001
+    python -m experiments.run_mcmc_phase0 --patients patients0.csv --patient rbg0001 --smoke
 """
 from __future__ import annotations
 
@@ -26,15 +26,16 @@ if os.path.isdir(os.path.join(_root, "t1d_twin")) and _root not in sys.path:
 from experiments import exp_common as C            # artifact paths + (de)serialization
 from experiments import replaybg_plant as P        # the ReplayBG plant
 from experiments import population as POP          # cached LS-fit population
-from experiments import phase0_paths as P0        # phase0-namespaced artifact paths
+from experiments import output_paths as OP        # standardized layout (phase-tagged)
 from t1d_twin.identify_mcmc import identify_twin_from_run
 
-# Same hyperparameters as the Phase 2 run_mcmc (so the only difference is the plant)
+# Same hyperparameters as the Phase 2 run_mcmc_phase2 (so the only difference is the plant)
 PROD = dict(nwalkers=64, nburn=2000, nsample=6000, n_posterior=2000)
 SMOKE = dict(nwalkers=16, nburn=40, nsample=80, n_posterior=100)
 
 
 def _resolve(patient: str, patients_csv: str) -> P.Phase0Subject:
+    """Look up one Phase-0 subject by name in the cohort CSV (KeyError if absent)."""
     subs = {s.name: s for s in P.load_phase0_cohort(patients_csv)}
     if patient not in subs:
         raise KeyError(f"patient {patient!r} not in {patients_csv}")
@@ -50,6 +51,7 @@ def _fit_rmse_ig(twin, run) -> float:
 
 
 def main() -> None:
+    """CLI: fit the Phase-0 MCMC twin for one patient (ReplayBG plant) and save the posterior artifact."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true", help="fast tiny-chain plumbing run")
     ap.add_argument("--patients", required=True, help="phase0 cohort CSV (patients0.csv)")
@@ -88,7 +90,7 @@ def main() -> None:
           f"(true {subject.theta[5]:.2e})")
     print(f"[mcmc0] fit RMSE vs identification IG = {_fit_rmse_ig(twin, run):.2f} mg/dL")
 
-    path = C.save_mcmc(twin, P0.artifact_paths(subject)["mcmc"])
+    path = C.save_mcmc(twin, OP.twin_artifact_paths(OP.PHASE0, subject.safe_name)["mcmc"])
     print(f"[mcmc0] saved -> {path}")
 
 

@@ -1,14 +1,14 @@
 """Phase 0, stage 2/2 — identify the **SBI / NPE** twin on the matched-model plant.
 
-Identical to ``run_sbi.py`` except the identification CGM comes from the
+Identical to ``run_sbi_phase2.py`` except the identification CGM comes from the
 self-consistent ReplayBG plant. The training simulations already come from the
 ReplayBG forward model, so in Phase 0 the NPE is trained on exactly the
 data-generating process and conditioned on an observation from it — the cleanest
 possible amortized-inference case.
 
 Run (from the repo root):
-    python -m experiments.run_sbi0 --patients patients0.csv --patient rbg0001
-    python -m experiments.run_sbi0 --patients patients0.csv --patient rbg0001 --smoke
+    python -m experiments.run_sbi_phase0 --patients patients0.csv --patient rbg0001
+    python -m experiments.run_sbi_phase0 --patients patients0.csv --patient rbg0001 --smoke
 """
 from __future__ import annotations
 
@@ -31,11 +31,11 @@ if os.path.isdir(os.path.join(_root, "t1d_twin")) and _root not in sys.path:
 from experiments import exp_common as C
 from experiments import replaybg_plant as P
 from experiments import population as POP
-from experiments import phase0_paths as P0
+from experiments import output_paths as OP        # standardized layout (phase-tagged)
 from t1d_twin import identify_sbi as S
 from t1d_twin.identify_sbi import make_prior, generate_training_data, SBITwin
 
-# Same hyperparameters as the Phase 2 run_sbi (only the plant differs)
+# Same hyperparameters as the Phase 2 run_sbi_phase2 (only the plant differs)
 PROD = dict(n_train=20_000, max_num_epochs=400, n_posterior=2000,
             hidden=64, transforms=8,
             train_batch=512, sim_batch=1024, max_attempts=400, stop_after=30)
@@ -47,6 +47,7 @@ CLIP = 5.0
 
 
 def _resolve(patient: str, patients_csv: str) -> P.Phase0Subject:
+    """Look up one Phase-0 subject by name in the cohort CSV (KeyError if absent)."""
     subs = {s.name: s for s in P.load_phase0_cohort(patients_csv)}
     if patient not in subs:
         raise KeyError(f"patient {patient!r} not in {patients_csv}")
@@ -54,6 +55,7 @@ def _resolve(patient: str, patients_csv: str) -> P.Phase0Subject:
 
 
 def _posterior_nn(hidden: int, transforms: int):
+    """Build a MAF posterior-net factory for sbi, tolerant of the installed sbi version's import path."""
     try:
         from sbi.neural_nets import posterior_nn
     except Exception:
@@ -62,6 +64,7 @@ def _posterior_nn(hidden: int, transforms: int):
 
 
 def _fit_rmse_ig(twin, run) -> float:
+    """RMSE between the twin's replayed noise-free IG and the observed identification IG, over their common length."""
     pred = twin.replay_run(run, add_noise=False)
     obs = run.bg()
     n = min(len(pred), len(obs))
@@ -69,6 +72,7 @@ def _fit_rmse_ig(twin, run) -> float:
 
 
 def main() -> None:
+    """CLI: fit the Phase-0 SBI twin for one patient (ReplayBG plant) and save the posterior artifact."""
     try:
         torch.set_num_threads(1)
     except Exception:
@@ -144,7 +148,7 @@ def main() -> None:
           f"(true {subject.theta[5]:.2e})")
     print(f"[sbi0] fit RMSE vs identification IG = {_fit_rmse_ig(twin, run):.2f} mg/dL")
 
-    path = C.save_sbi(twin, P0.artifact_paths(subject)["sbi"])
+    path = C.save_sbi(twin, OP.twin_artifact_paths(OP.PHASE0, subject.safe_name)["sbi"])
     print(f"[sbi0] saved -> {path}")
 
 

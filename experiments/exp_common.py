@@ -15,7 +15,7 @@ changes), so any difference in the results is attributable to the twinning
 method, not to the data. (``WEEK_HOURS`` is a backward-compat alias for this
 window; the horizon used to be a full week.)
 
-This module is imported by ``run_mcmc.py``, ``run_sbi.py``, ``compute_results.py``
+This module is imported by ``run_mcmc_phase2.py``, ``run_sbi_phase2.py``, ``compute_results_phase2.py``
 and the Phase 0/1/2 drivers; it never trains anything itself.
 """
 from __future__ import annotations
@@ -58,10 +58,12 @@ START = datetime.datetime(2024, 1, 1, 0, 0, 0)
 #
 # The standardized on-disk layout lives in ``experiments.output_paths`` (a
 # pure-stdlib module the simglucose-free Phase 0 path can also import). We
-# re-export the constants/helpers here so the simglucose-side code can keep
-# using ``C.ARTIFACT_DIR`` / ``C.results_dir_for`` etc. unchanged. Every
-# generated output (artifacts, results, logs) lives under one root; override
-# with T1D_OUTPUT_ROOT, e.g.:  T1D_OUTPUT_ROOT=./_out python -m experiments.run_phase1
+# re-export its constants here so the simglucose-side code can keep using
+# ``C.ARTIFACT_DIR`` / ``C.OUTPUT_ROOT`` etc. Per-subject paths come from
+# ``output_paths`` directly (e.g. ``OP.twin_artifact_paths(OP.PHASE2, name)``),
+# parameterized by phase, so there is one set of helpers, not one per phase.
+# Override the root with T1D_OUTPUT_ROOT, e.g.:
+#   T1D_OUTPUT_ROOT=./_out python -m experiments.run_phase1
 # ---------------------------------------------------------------------------
 from . import output_paths as _OP
 
@@ -86,6 +88,7 @@ SBI_PATH = os.path.join(ARTIFACT_DIR, "sbi_twin.npz")
 
 
 def hours_for(smoke: bool) -> float:
+    """Simulation horizon in hours: SMOKE_HOURS in smoke mode, else WINDOW_HOURS."""
     return SMOKE_HOURS if smoke else WINDOW_HOURS
 
 
@@ -146,6 +149,7 @@ def policy_set(smoke: bool = False):
 # not required at scoring time (the identification observation is fixed).
 
 def save_mcmc(twin, path: str = MCMC_PATH) -> str:
+    """Serialize an MCMC twin (posterior samples + replay config) to an .npz artifact; returns the path."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez(path, theta_post=twin.theta_post, Ib=twin.Ib,
              sample_time=twin.sample_time, dt=twin.dt, sigma=twin.sigma,
@@ -154,6 +158,7 @@ def save_mcmc(twin, path: str = MCMC_PATH) -> str:
 
 
 def load_mcmc(path: str = MCMC_PATH):
+    """Reconstruct an MCMCTwin from a saved .npz artifact."""
     from t1d_twin.identify_mcmc import MCMCTwin
     d = np.load(path, allow_pickle=True)
     return MCMCTwin(theta_post=d["theta_post"], Ib=float(d["Ib"]),
@@ -162,6 +167,7 @@ def load_mcmc(path: str = MCMC_PATH):
 
 
 def save_sbi(twin, path: str = SBI_PATH) -> str:
+    """Serialize an SBI twin (natural-space theta samples + replay config) to an .npz artifact; returns the path."""
     # twin.theta_post is in NATURAL theta space (SBITwin converts on init).
     os.makedirs(os.path.dirname(path), exist_ok=True)
     np.savez(path, theta_post=twin.theta_post, Ib=twin.Ib,
@@ -171,6 +177,7 @@ def save_sbi(twin, path: str = SBI_PATH) -> str:
 
 
 def load_sbi(path: str = SBI_PATH):
+    """Reconstruct an SBITwin from a saved .npz artifact (stored in natural theta space, so log_space=False)."""
     from t1d_twin.identify_sbi import SBITwin
     d = np.load(path, allow_pickle=True)
     # stored in natural space -> log_space=False so it is used as-is
@@ -214,6 +221,7 @@ SEEN_BAND = 0.2
 
 
 def factors_for(smoke: bool):
+    """Return the (bolus_factors, basal_factors) candidate-therapy grid for smoke vs PROD."""
     return (SMOKE_BOLUS, SMOKE_BASAL) if smoke else (PROD_BOLUS, PROD_BASAL)
 
 
@@ -348,26 +356,11 @@ def resolve_subject(patient: str | None = None, patients_csv: str | None = None)
         subs = {s.name: s for s in PT.load_subjects_csv(patients_csv)}
         if patient is None:
             raise ValueError("--patients given without --patient; pass a Name "
-                             "(or use run_suite to iterate all rows)")
+                             "(or use run_phase2 / run_phase0_twins to iterate all rows)")
         if patient not in subs:
             raise KeyError(f"patient {patient!r} not in {patients_csv}")
         return subs[patient]
     return PT.subject_from_base(patient or PATIENT)
-
-
-def artifact_paths(subject) -> dict:
-    """Per-subject Phase 2 twin-artifact paths under ``artifacts/phase2/<name>/``.
-
-    Phase 0 has its own (``phase0_paths.artifact_paths``); both delegate to the
-    shared ``output_paths`` layout so the two phases sit side by side under
-    ``artifacts/`` and never clobber each other (they share patient names).
-    """
-    return _OP.twin_artifact_paths(_OP.PHASE2, subject.safe_name)
-
-
-def results_dir_for(subject) -> str:
-    """Per-subject Phase 2 results dir: ``results/phase2/<name>/``."""
-    return _OP.results_dir(_OP.PHASE2, subject.safe_name)
 
 
 # ---------------------------------------------------------------------------

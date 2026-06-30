@@ -2,15 +2,15 @@
 
 Runs each requested twinning method (MCMC / SBI, and any future per-instance
 method) on an explicit list of patients, isolating every fit in its own
-subprocess so one patient's failure can't abort the sweep (matching
-``run_suite``'s crash-tolerance), then scores with a results module and
+subprocess so one patient's failure can't abort the sweep (crash-tolerant
+and resumable), then scores with a results module and
 aggregates the per-patient comparison tables into a **mean +/- std** DT2 summary
 per method.
 
     Phase 2 = this over all (simglucose) patients (the heavy, shardable sweep).
     Phase 0 = this over the self-consistent ReplayBG cohort (the matched-model
               baseline) -- same machinery, different plant/stages, wired in by
-              ``run_phase0`` via the ``stages`` / ``results_module`` /
+              ``run_phase0_twins`` via the ``stages`` / ``results_module`` /
               ``load_subjects`` parameters below.
 
 Only ``mcmc`` and ``sbi`` are per-instance twins; the amortized baselines (TCN /
@@ -31,18 +31,19 @@ import pandas as pd
 
 from experiments import exp_common as C
 from experiments import patients as PT
+from t1d_twin.evaluate import DECISION_COLS, FIDELITY_COLS
+from experiments import output_paths as OP
 
 # Phase 2 (simglucose plant) defaults. Phase 0 passes its own equivalents.
-STAGES = {"mcmc": "experiments.run_mcmc",
-          "sbi": "experiments.run_sbi"}
-RESULTS_MODULE = "experiments.compute_results"
+STAGES = {"mcmc": "experiments.run_mcmc_phase2",
+          "sbi": "experiments.run_sbi_phase2"}
+RESULTS_MODULE = "experiments.compute_results_phase2"
 
-DECISION_COLS = ["spearman", "regret"]
-FIDELITY_COLS = ["rmse", "mard"]
 
 
 def _run(mod: str, patient: str, patients_csv: str, smoke: bool,
          population: str | None = None) -> int:
+    """Launch one per-patient fit module (e.g. run_mcmc_phase2) as an isolated subprocess so a single patient failure cannot abort the sweep; returns its exit code."""
     cmd = [sys.executable, "-m", mod, "--patient", patient, "--patients", patients_csv]
     if smoke:
         cmd.append("--smoke")
@@ -62,6 +63,7 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _print_summary(summary: pd.DataFrame, label: str, n_patients: int) -> None:
+    """Pretty-print the per-method mean +/- std of the decision and fidelity metrics for a phase."""
     print(f"\n=== {label} DT2 (mean +/- std across {n_patients} patients) ===")
     for _, r in summary.iterrows():
         parts = [f"n={int(r['n'])}"]
@@ -85,14 +87,15 @@ def run_phase(names, methods, patients_csv, population=None, smoke=False,
     stages : ``method -> module`` map of per-patient fit subprocesses. Defaults
         to the Phase 2 (simglucose) stages; Phase 0 passes the ``*0`` variants.
     results_module : module that scores a patient's saved twins and writes its
-        ``comparison_table.csv`` (Phase 2: ``compute_results``; Phase 0:
-        ``compute_results0``).
+        ``comparison_table.csv`` (Phase 2: ``compute_results_phase2``; Phase 0:
+        ``compute_results_phase0``).
     load_subjects : callable(csv) -> list of subjects, each exposing ``.name``
         and ``.safe_name``. Defaults to ``patients.load_subjects_csv``; Phase 0
         passes ``replaybg_plant.load_phase0_csv``.
     results_dir_fn : callable(subject) -> per-subject results dir. Defaults to
-        ``exp_common.results_dir_for``; Phase 0 passes ``phase0_paths.results_dir_for``
-        so its (name-shared) matched cohort doesn't clobber Phase 2's tables.
+        the Phase 2 layout (``output_paths.results_dir(PHASE2, name)``); Phase 0
+        passes the PHASE0 equivalent so its (name-shared) matched cohort never
+        clobbers Phase 2's tables.
     skip_existing : reuse a patient's ``comparison_table.csv`` if present
         (resumable, crash-tolerant). Set False to force re-fit.
     aggregate_only : never fit/score; only read existing comparison tables and
@@ -106,7 +109,7 @@ def run_phase(names, methods, patients_csv, population=None, smoke=False,
     if load_subjects is None:
         load_subjects = PT.load_subjects_csv
     if results_dir_fn is None:
-        results_dir_fn = C.results_dir_for
+        results_dir_fn = lambda s: OP.results_dir(OP.PHASE2, s.safe_name)
 
     methods = [m for m in methods if m in stages]
     subs = {s.name: s for s in load_subjects(patients_csv)}

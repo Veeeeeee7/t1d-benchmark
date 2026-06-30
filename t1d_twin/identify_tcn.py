@@ -44,6 +44,7 @@ class _TCNBlock(nn.Module):
 
     def __init__(self, channels: int, kernel_size: int = 3,
                  dilation: int = 1, p_drop: float = 0.1) -> None:
+        """Build the two dilated convs plus BatchNorm/Dropout/ReLU; padding is set so the block preserves sequence length and stacks."""
         super().__init__()
         pad = (kernel_size - 1) // 2 * dilation
         self.conv1 = nn.Conv1d(channels, channels, kernel_size,
@@ -56,6 +57,7 @@ class _TCNBlock(nn.Module):
         self.act = nn.ReLU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the residual block to (B, C, L) and return the same-shape activated sum, ReLU(x + f(x))."""
         y = self.drop(self.act(self.bn1(self.conv1(x))))
         y = self.bn2(self.conv2(y))
         return self.act(x + y)
@@ -90,6 +92,7 @@ class TCNRegressor(nn.Module):
                  in_channels: int = 3, in_len: int | None = None,
                  channels: int = 64, n_blocks: int = 4, kernel_size: int = 3,
                  p_drop: float = 0.1) -> None:
+        """Build the channel-mixing stem, the dilated residual stack (dilations 1,2,4,...), the global-average pool, and the dense head that regresses to 8-dim phi."""
         super().__init__()
         self.in_channels = int(in_channels)
         self.in_len = in_len  # unused (kept for caller compatibility)
@@ -110,6 +113,7 @@ class TCNRegressor(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the TCN on x (accepts (L,), (B, L) or (B, C, L)) and return the regressed phi = [log-rates, Gb], shape (B, out_dim)."""
         # Normalize the input to (B, C, L) regardless of how it arrives.
         if x.dim() == 1:            # (L,)     single, single-channel
             x = x.view(1, 1, -1)
@@ -134,6 +138,7 @@ class PointTwin(SBITwin):
 
     def __init__(self, theta_point, Ib, sample_time, dt=1.0,
                  sensor_name="Dexcom", sigma=DEFAULT_SIGMA):
+        """Wrap a single regressed theta-hat as a one-row posterior so replay/predict/metrics are shared with SBITwin; the prediction band is degenerate by design."""
         theta_point = np.asarray(theta_point, dtype=float).reshape(1, -1)
         super().__init__(posterior=None, theta_post=theta_point, Ib=Ib,
                          sample_time=sample_time, dt=dt, log_space=False,
@@ -141,5 +146,6 @@ class PointTwin(SBITwin):
         self.theta_point = theta_point.ravel()
 
     def summary(self) -> dict:
+        """Per-parameter point estimate (no posterior spread), keyed by THETA_NAMES."""
         return {name: {"point": float(self.theta_point[i])}
                 for i, name in enumerate(THETA_NAMES)}

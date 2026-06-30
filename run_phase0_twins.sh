@@ -32,13 +32,13 @@
 # NOTE: run with `bash run_phase0_twins.sh` (it submits the real jobs itself).
 # The #SBATCH block is only a safety net so an accidental `sbatch` still
 # allocates something; real per-stage resources are on the inner sbatch lines.
-#SBATCH --account=ai-gpu
+#SBATCH --account=general
 #SBATCH --partition=c64-m512
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
-#SBATCH --time=00:30:00
+#SBATCH --time=1-00:00:00
 #SBATCH --output=/scratch/vmli3/t1d_experiment/logs/phase0/%x_%j.out
 #SBATCH --error=/scratch/vmli3/t1d_experiment/logs/phase0/%x_%j.err
 #SBATCH --mail-user victor.li@emory.edu
@@ -119,12 +119,12 @@ fit_one() {
     if [[ -f "$T1D_OUTPUT_ROOT/results/phase0/${safe}/comparison_table.csv" ]]; then
         echo "[skip] $name"; return 0
     fi
-    python -m experiments.run_mcmc0 --patient "$name" --patients "$PATIENTS" \
+    python -m experiments.run_mcmc_phase0 --patient "$name" --patients "$PATIENTS" \
         || echo "[warn] $name: mcmc0 nonzero"
-    python -m experiments.run_sbi0  --patient "$name" --patients "$PATIENTS" \
+    python -m experiments.run_sbi_phase0  --patient "$name" --patients "$PATIENTS" \
         || echo "[warn] $name: sbi0 nonzero"
-    python -m experiments.compute_results0 --patient "$name" --patients "$PATIENTS" \
-        || echo "[warn] $name: compute_results0 nonzero"
+    python -m experiments.compute_results_phase0 --patient "$name" --patients "$PATIENTS" \
+        || echo "[warn] $name: compute_results_phase0 nonzero"
 }
 
 case "$STAGE" in
@@ -151,21 +151,25 @@ case "$STAGE" in
     NPROC="${SLURM_CPUS_PER_TASK:-1}"
     echo "=== task $SLURM_ARRAY_TASK_ID: patients [$start,$end) across $NPROC core(s) $(date) ==="
     # Fan this task's patients across the cores: each patient's fit is itself
-    # single-threaded (OMP/MKL=1, torch pinned in run_sbi0), so we run up to NPROC
+    # single-threaded (OMP/MKL=1, torch pinned in run_sbi_phase0), so we run up to NPROC
     # patients at once. Process substitution keeps the loop in THIS shell so the
     # background jobs are visible to `wait`.
     while IFS= read -r nm; do
         ( echo "--- $nm (task $SLURM_ARRAY_TASK_ID) start $(date) ==="; fit_one "$nm" ) &
         # throttle to NPROC concurrent patients
         while (( $(jobs -rp | wc -l) >= NPROC )); do wait -n; done
-    done < <(awk -F, -v s="$start" -v e="$end" 'NR>=s+2 && NR<=e+1{print $1}' "$PATIENTS")
+    done < <(awk -F, -v s="$start" -v e="$end" '
+        NR==1 { for (i=1;i<=NF;i++) if ($i=="Name") col=i;
+                if (!col) { print "ERROR: no Name column in " FILENAME > "/dev/stderr"; exit 3 }
+                next }
+        NR>=s+2 && NR<=e+1 { print $col }' "$PATIENTS")
     wait
     echo "=== task $SLURM_ARRAY_TASK_ID: all patients done $(date) ==="
     ;;
 
   aggregate)
     echo "[aggregate] building the phase 0 summary over ALL patients"
-    python -m experiments.run_phase0 --patients "$PATIENTS" --aggregate-only
+    python -m experiments.run_phase0_twins --patients "$PATIENTS" --aggregate-only
     echo "summary: results/phase0_summary.csv"
     ;;
 
